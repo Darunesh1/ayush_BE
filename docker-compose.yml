@@ -1,0 +1,73 @@
+version: "3.9"
+
+services:
+  web:
+    build: .
+    command: >
+      sh -lc "
+        uv run python manage.py makemigrations &&
+        uv run python manage.py migrate &&
+        uv run uvicorn config.asgi:application --host 0.0.0.0 --port 8000 --reload
+      "
+    container_name: django_postgre_docker
+    ports:
+      - "8000:8000"
+    # Prefer watch sync over a broad bind mount for better perf and control
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /app
+          ignore:
+            - .git/
+            - .venv/
+            - node_modules/
+            - __pycache__/
+            - staticfiles/
+            - db.sqlite3
+        - action: rebuild
+          path: pyproject.toml
+        - action: rebuild
+          path: uv.lock
+    # If needed, you can still keep a bind mount, but avoid overlapping with watch
+    # volumes:
+    #   - .:/app:cached
+    environment:
+      - UV_COMPILE_BYTECODE=1
+      - UV_LINK_MODE=copy
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - django-app-network
+
+  postgres:
+    image: postgres:16.4-alpine
+    container_name: postgres
+    environment:
+      - POSTGRES_DB=django_db
+      - POSTGRES_USER=devuser
+      - POSTGRES_PASSWORD=devpassword
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+    ports:
+      - "5431:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devuser -d django_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - django-app-network
+
+volumes:
+  postgres_data:
+
+networks:
+  django-app-network:
+    driver: bridge

@@ -1,0 +1,13 @@
+# Django core
+DJANGO_SECRET_KEY=
+DJANGO_DEBUG=1
+
+
+# Database (matches your compose's postgres service)
+DATABASE_NAME=
+DATABASE_USER=
+DATABASE_PASSWORD=
+DATABASE_HOST=
+DATABASE_PORT=
+
+
