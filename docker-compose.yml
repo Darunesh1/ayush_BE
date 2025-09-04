@@ -1,5 +1,4 @@
 version: "3.9"
-
 services:
   web:
     build: .
@@ -9,7 +8,7 @@ services:
         uv run python manage.py migrate &&
         uv run uvicorn config.asgi:application --host 0.0.0.0 --port 8000 --reload
       "
-    container_name: django_postgre_docker
+    container_name: ayushsync_backend
     ports:
       - "8000:8000"
     # Prefer watch sync over a broad bind mount for better perf and control
@@ -41,13 +40,13 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - django-app-network
+      - ayushsync-app-network
 
   postgres:
     image: postgres:16.4-alpine
-    container_name: postgres
+    container_name: ayushsync_postgres
     environment:
-      - POSTGRES_DB=django_db
+      - POSTGRES_DB=ayushsync_db
       - POSTGRES_USER=devuser
       - POSTGRES_PASSWORD=devpassword
       - POSTGRES_HOST=postgres
@@ -55,19 +54,20 @@ services:
     ports:
       - "5431:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data/
+      - ayushsync_data:/var/lib/postgresql/data/
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U devuser -d django_db"]
+      test: ["CMD-SHELL", "pg_isready -U devuser -d ayushsync_db"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 20s
     networks:
-      - django-app-network
+      - ayushsync-app-network
 
 volumes:
-  postgres_data:
+  ayushsync_data:
 
 networks:
-  django-app-network:
+  ayushsync-app-network:
     driver: bridge
+
