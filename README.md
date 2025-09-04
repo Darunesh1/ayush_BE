@@ -32,6 +32,8 @@ cd ayushsync-backend
 cp env_example .env
 ```
 
+### Make sure u have docker installed
+
 ## To run the application
 
 ```bash
