@@ -18,10 +18,16 @@ from django.contrib import admin
 from django.urls import path
 from django.conf import settings
 from django.conf.urls.static import static
+from django.urls import path, include
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path("admin/", admin.site.urls),
+    path("api/fhir/", include("fhir.urls")),
+    path("api/auth/", include("auth_abha.urls")),
+    path("api/analytics/", include("analytics.urls")),
+    path("api/terminologies/", include("terminologies.urls")),
 ]
+
 
 if settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
