@@ -28,13 +28,11 @@ class UnaniModel(BaseNamasteModel):
     romanized_name = models.CharField(max_length=255, null=True, blank=True)
     reference = models.TextField(null=True, blank=True)
     
+
 from django.db import models
 
 class ICDClassKind(models.Model):
-    """
-    Represents the type of the ICD entity (chapter, block, category, etc.).
-    """
-    name = models.CharField(max_length=50, unique=True)  # e.g., chapter, block, category
+    name = models.CharField(max_length=50, unique=True)
     description = models.TextField(null=True, blank=True)
 
     def __str__(self):
@@ -42,14 +40,11 @@ class ICDClassKind(models.Model):
 
 
 class ICD11Term(models.Model):
-    """
-    Represents a single ICD-11 entity (chapter, block, or category) without block/grouping details.
-    """
     foundation_uri = models.URLField(max_length=500, unique=True)
     linearization_uri = models.URLField(max_length=500, null=True, blank=True)
-    code = models.CharField(max_length=50, null=True, blank=True)  # e.g., 1.0A00
+    code = models.CharField(max_length=50, null=True, blank=True)
     title = models.CharField(max_length=255)
-    class_kind = models.ForeignKey(ICDClassKind, on_delete=models.PROTECT)
+    class_kind = models.ForeignKey(ICDClassKind, on_delete=models.PROTECT, null=True, blank=True)
     depth_in_kind = models.PositiveIntegerField(null=True, blank=True)
     is_residual = models.BooleanField(default=False)
     primary_location = models.CharField(max_length=255, null=True, blank=True)
@@ -59,9 +54,6 @@ class ICD11Term(models.Model):
     is_leaf = models.BooleanField(default=False)
     no_of_non_residual_children = models.PositiveIntegerField(null=True, blank=True)
     version_date = models.DateField(null=True, blank=True)
-
-    class Meta:
-        db_table = "icd11_terms"
 
     def __str__(self):
         return f"{self.code} - {self.title}" if self.code else self.title
