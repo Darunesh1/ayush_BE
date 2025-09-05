@@ -28,7 +28,11 @@ class Command(BaseCommand):
 
         self.stdout.write(f"Loading ICD-11 data from {file_path} with batch size {batch_size}...")
 
+        # Load CSV
         df = pd.read_csv(file_path, low_memory=False)
+
+        # Clean Title: remove all leading hyphens and spaces
+        df['Title'] = df['Title'].astype(str).str.replace(r'^[-\s]+', '', regex=True)
 
         batch = []
         inserted_count = 0
@@ -49,29 +53,31 @@ class Command(BaseCommand):
             is_residual = str(row.get('IsResidual', 'FALSE')).strip().upper() == 'TRUE'
             is_leaf = str(row.get('isLeaf', 'FALSE')).strip().upper() == 'TRUE'
 
-            # Parse version date from '8.0Y' if possible
-            version_raw = row.get('8.0Y')
+            # Parse version date from '8Y' column
+            version_raw = row.get('8Y')
             version_date = None
             if pd.notna(version_raw):
                 try:
-                    version_date = datetime.strptime(version_raw, "%Y-%m-%d").date()
+                    # Attempt to parse as YYYY-MM-DD, fallback to None
+                    version_date = datetime.strptime(str(version_raw), "%Y-%m-%d").date()
                 except Exception:
                     version_date = None
 
+            # Create ICD11Term instance
             term = ICD11Term(
                 foundation_uri=foundation_uri,
                 linearization_uri=row.get('Linearization (release) URI'),
-                code=row.get('8.0Y'),
+                code=str(row.get('8Y')) if pd.notna(row.get('8Y')) else None,
                 title=row.get('Title'),
                 class_kind=class_kind,
-                depth_in_kind=row.get('DepthInKind'),
+                depth_in_kind=row.get('DepthInKind') if pd.notna(row.get('DepthInKind')) else None,
                 is_residual=is_residual,
                 primary_location=row.get('PrimaryLocation'),
                 chapter_no=row.get('ChapterNo'),
                 browser_link=row.get('BrowserLink'),
                 icat_link=row.get('iCatLink'),
                 is_leaf=is_leaf,
-                no_of_non_residual_children=row.get('noOfNonResidualChildren'),
+                no_of_non_residual_children=row.get('noOfNonResidualChildren') if pd.notna(row.get('noOfNonResidualChildren')) else None,
                 version_date=version_date
             )
 
