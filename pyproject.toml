@@ -9,6 +9,7 @@ dependencies = [
     "django-admin-interface>=0.30.1",
     "django-colorfield>=0.14.0",
     "django-oauth-toolkit>=3.0.1",
+    "django-stubs>=5.2.2",
     "djangorestframework>=3.16.1",
     "dotenv>=0.9.9",
     "gunicorn>=23.0.0",
