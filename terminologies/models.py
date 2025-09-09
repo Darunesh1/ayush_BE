@@ -1,38 +1,95 @@
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVectorField
 from django.db import models
 
 
 class BaseNamasteModel(models.Model):
-    code = models.CharField(max_length=50, unique=True)  # Unique code (e.g., NAMC_CODE)
+    code = models.CharField(max_length=50, unique=True, db_index=True)
     description = models.TextField(null=True, blank=True)
-    english_name = models.CharField(max_length=255, null=True, blank=True)
+    english_name = models.CharField(
+        max_length=255, null=True, blank=True, db_index=True
+    )
+
+    # Optional: Pre-computed search vector for full-text search
+    search_vector = SearchVectorField(null=True, blank=True)
 
     class Meta:
         abstract = True
+        indexes = [
+            # Composite index for common search patterns
+            models.Index(fields=["code", "english_name"]),
+        ]
 
     def __str__(self):
         return f"{self.code} - {self.english_name}"
 
 
 class AyurvedhaModel(BaseNamasteModel):
-    hindi_name = models.CharField(max_length=255, null=True, blank=True)
-    diacritical_name = models.CharField(max_length=255, null=True, blank=True)
+    hindi_name = models.CharField(max_length=255, null=True, blank=True, db_index=True)
+    diacritical_name = models.CharField(
+        max_length=255, null=True, blank=True, db_index=True
+    )
+
+    class Meta:
+        db_table = "ayurveda_terms"
+        verbose_name = "Ayurveda Term"
+        verbose_name_plural = "Ayurveda Terms"
+        indexes = [
+            # Standard B-tree indexes for exact lookups
+            models.Index(fields=["hindi_name"]),
+            models.Index(fields=["diacritical_name"]),
+            models.Index(fields=["english_name", "hindi_name"]),
+            # GIN index for search vector
+            GinIndex(fields=["search_vector"], name="ayurveda_search_gin"),
+        ]
 
 
 class SiddhaModel(BaseNamasteModel):
-    tamil_name = models.CharField(max_length=255, null=True, blank=True)
-    romanized_name = models.CharField(max_length=255, null=True, blank=True)
+    tamil_name = models.CharField(max_length=255, null=True, blank=True, db_index=True)
+    romanized_name = models.CharField(
+        max_length=255, null=True, blank=True, db_index=True
+    )
     reference = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "siddha_terms"
+        verbose_name = "Siddha Term"
+        verbose_name_plural = "Siddha Terms"
+        indexes = [
+            models.Index(fields=["tamil_name"]),
+            models.Index(fields=["romanized_name"]),
+            models.Index(fields=["english_name", "tamil_name"]),
+            GinIndex(fields=["search_vector"], name="siddha_search_gin"),
+        ]
 
 
 class UnaniModel(BaseNamasteModel):
-    arabic_name = models.CharField(max_length=255, null=True, blank=True)
-    romanized_name = models.CharField(max_length=255, null=True, blank=True)
+    arabic_name = models.CharField(max_length=255, null=True, blank=True, db_index=True)
+    romanized_name = models.CharField(
+        max_length=255, null=True, blank=True, db_index=True
+    )
     reference = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "unani_terms"
+        verbose_name = "Unani Term"
+        verbose_name_plural = "Unani Terms"
+        indexes = [
+            models.Index(fields=["arabic_name"]),
+            models.Index(fields=["romanized_name"]),
+            models.Index(fields=["english_name", "arabic_name"]),
+            GinIndex(fields=["search_vector"], name="unani_search_gin"),
+        ]
 
 
 class ICDClassKind(models.Model):
-    name = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=50, unique=True, db_index=True)
     description = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "icd_class_kinds"
+        verbose_name = "ICD Class Kind"
+        verbose_name_plural = "ICD Class Kinds"
 
     def __str__(self):
         return f"{self.name}"
@@ -41,20 +98,54 @@ class ICDClassKind(models.Model):
 class ICD11Term(models.Model):
     foundation_uri = models.URLField(max_length=500, unique=True)
     linearization_uri = models.URLField(max_length=500, null=True, blank=True)
-    code = models.CharField(max_length=50, null=True, blank=True)
-    title = models.CharField(max_length=255)
+    code = models.CharField(max_length=50, null=True, blank=True, db_index=True)
+    title = models.CharField(max_length=255, db_index=True)
     class_kind = models.ForeignKey(
-        ICDClassKind, on_delete=models.PROTECT, null=True, blank=True
+        ICDClassKind,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="terms",
     )
     depth_in_kind = models.PositiveIntegerField(null=True, blank=True)
-    is_residual = models.BooleanField(default=False)
+    is_residual = models.BooleanField(default=False, db_index=True)
     primary_location = models.CharField(max_length=255, null=True, blank=True)
-    chapter_no = models.CharField(max_length=50, null=True, blank=True)
+    chapter_no = models.CharField(max_length=50, null=True, blank=True, db_index=True)
     browser_link = models.URLField(max_length=500, null=True, blank=True)
     icat_link = models.URLField(max_length=500, null=True, blank=True)
-    is_leaf = models.BooleanField(default=False)
+    is_leaf = models.BooleanField(default=False, db_index=True)
     no_of_non_residual_children = models.PositiveIntegerField(null=True, blank=True)
     version_date = models.DateField(null=True, blank=True)
+
+    # Pre-computed search vector for full-text search
+    search_vector = SearchVectorField(null=True, blank=True)
+
+    class Meta:
+        db_table = "icd11_terms"
+        verbose_name = "ICD-11 Term"
+        verbose_name_plural = "ICD-11 Terms"
+        indexes = [
+            # Standard indexes for common queries
+            models.Index(fields=["code"]),
+            models.Index(fields=["title"]),
+            models.Index(fields=["chapter_no"]),
+            models.Index(fields=["code", "title"]),
+            models.Index(fields=["chapter_no", "is_leaf"]),
+            models.Index(fields=["is_residual", "chapter_no"]),
+            # GIN index for search vector
+            GinIndex(fields=["search_vector"], name="icd11_search_gin"),
+        ]
+
+        # Add database constraints
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(depth_in_kind__gte=0), name="positive_depth_in_kind"
+            ),
+            models.CheckConstraint(
+                check=models.Q(no_of_non_residual_children__gte=0),
+                name="positive_children_count",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.code} - {self.title}" if self.code else f"{self.title}"
