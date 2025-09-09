@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import AyurvedhaModel, ICD11Term, ICDClassKind, SiddhaModel
+from .models import AyurvedhaModel, ICD11Term, ICDClassKind, SiddhaModel, UnaniModel
 
 
 class ICDClassKindSerializer(serializers.ModelSerializer):
@@ -29,7 +29,7 @@ class ICDClassKindSerializer(serializers.ModelSerializer):
         if self.instance and self.instance.name == value:
             return value
 
-        if ICDClassKind.objects.filter(name=value).exists():
+        if ICDClassKind.objects.filter(name=value).exists():  # type: ignore
             raise serializers.ValidationError(
                 "A class kind with this name already exists."
             )
@@ -56,7 +56,7 @@ class ICD11TermSerializer(serializers.ModelSerializer):
 
     # Separate field for write operations
     class_kind_id = serializers.PrimaryKeyRelatedField(
-        queryset=ICDClassKind.objects.all(),
+        queryset=ICDClassKind.objects.all(),  # type: ignore
         source="class_kind",
         write_only=True,
         required=False,
@@ -109,7 +109,7 @@ class ICD11TermSerializer(serializers.ModelSerializer):
         if self.instance and self.instance.foundation_uri == value:
             return value
 
-        if ICD11Term.objects.filter(foundation_uri=value).exists():
+        if ICD11Term.objects.filter(foundation_uri=value).exists():  # type: ignore
             raise serializers.ValidationError(
                 "An ICD-11 term with this foundation URI already exists."
             )
@@ -187,132 +187,81 @@ class ICD11TermSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class AyurvedaModelSerializer(serializers.ModelSerializer):
+class AyurvedhaModelSerializer(serializers.ModelSerializer):
     """
-    Complete serializer for AyurvedaModel.
+    Complete serializer for AyurvedhaModel.
     Handles Ayurveda medicine terminology from NAMASTE codes.
     """
 
-    # Assuming BaseNamasteModel fields - adjust based on your actual model
     display_name = serializers.SerializerMethodField()
 
     class Meta:
         model = AyurvedhaModel
         fields = [
             "id",
-            # BaseNamasteModel fields (adjust as per your actual model)
-            "namaste_code",
-            "english_name",
+            # BaseNamasteModel fields
+            "code",
             "description",
-            "severity_level",
-            "category",
-            "created_at",
-            "updated_at",
-            # AyurvedaModel specific fields
-            "sanskrit_name",
-            "devanagari_name",
-            "romanized_name",
-            "reference",
-            "classical_reference",
-            "dosha_involvement",
-            "prakruti_relation",
+            "english_name",
+            # AyurvedhaModel specific fields
+            "hindi_name",
+            "diacritical_name",
             "display_name",
         ]
-        read_only_fields = ["id", "created_at", "updated_at", "display_name"]
+        read_only_fields = ["id", "display_name"]
 
     def get_display_name(self, obj):
         """
         Get formatted display name for Ayurveda term.
         """
-        if hasattr(obj, "namaste_code") and obj.namaste_code:
-            return f"{obj.namaste_code} - {obj.english_name or obj.sanskrit_name}"
-        return obj.english_name or obj.sanskrit_name or "Unnamed Term"
+        if obj.code:
+            return (
+                f"{obj.code} - {obj.english_name or obj.hindi_name or 'Unnamed Term'}"
+            )
+        return obj.english_name or obj.hindi_name or "Unnamed Term"
 
-    def validate_sanskrit_name(self, value):
+    def validate_code(self, value):
         """
-        Validate Sanskrit name format.
+        Validate code is unique and not empty.
+        """
+        if not value or len(value.strip()) == 0:
+            raise serializers.ValidationError("Code cannot be empty.")
+
+        # Check uniqueness
+        if self.instance and self.instance.code == value:
+            return value
+
+        if AyurvedhaModel.objects.filter(code=value).exists():  # type: ignore
+            raise serializers.ValidationError("A term with this code already exists.")
+
+        return value.strip()
+
+    def validate_english_name(self, value):
+        """
+        Validate English name format.
         """
         if value and len(value.strip()) == 0:
             raise serializers.ValidationError(
-                "Sanskrit name cannot be empty if provided."
+                "English name cannot be empty if provided."
             )
         return value
 
-    def validate_devanagari_name(self, value):
+    def validate_hindi_name(self, value):
         """
-        Validate Devanagari name format.
+        Validate Hindi name format.
+        """
+        if value and len(value.strip()) == 0:
+            raise serializers.ValidationError("Hindi name cannot be empty if provided.")
+        return value
+
+    def validate_diacritical_name(self, value):
+        """
+        Validate diacritical name format.
         """
         if value and len(value.strip()) == 0:
             raise serializers.ValidationError(
-                "Devanagari name cannot be empty if provided."
+                "Diacritical name cannot be empty if provided."
             )
-        return value
-
-    def validate_romanized_name(self, value):
-        """
-        Validate romanized name format.
-        """
-        if value and len(value.strip()) == 0:
-            raise serializers.ValidationError(
-                "Romanized name cannot be empty if provided."
-            )
-        return value
-
-    def validate_dosha_involvement(self, value):
-        """
-        Validate dosha involvement according to Ayurvedic principles.
-        """
-        if value:
-            valid_doshas = [
-                "vata",
-                "pitta",
-                "kapha",
-                "vata-pitta",
-                "pitta-kapha",
-                "vata-kapha",
-                "tridosha",
-                "sannipata",
-            ]
-            dosha_lower = value.lower().strip()
-            if dosha_lower not in valid_doshas:
-                raise serializers.ValidationError(
-                    f"Invalid dosha involvement '{value}'. Valid options: {', '.join(valid_doshas)}"
-                )
-            return dosha_lower
-        return value
-
-    def validate_prakruti_relation(self, value):
-        """
-        Validate Prakruti (constitution) relation.
-        """
-        if value:
-            valid_prakruti = [
-                "vata-prakruti",
-                "pitta-prakruti",
-                "kapha-prakruti",
-                "vata-pitta-prakruti",
-                "pitta-kapha-prakruti",
-                "vata-kapha-prakruti",
-                "sama-prakruti",
-            ]
-            prakruti_lower = value.lower().strip()
-            if prakruti_lower not in valid_prakruti:
-                raise serializers.ValidationError(
-                    f"Invalid Prakruti relation '{value}'. Valid options: {', '.join(valid_prakruti)}"
-                )
-            return prakruti_lower
-        return value
-
-    def validate_severity_level(self, value):
-        """
-        Validate severity level.
-        """
-        if value:
-            valid_levels = ["mild", "moderate", "severe", "critical"]
-            if value.lower() not in valid_levels:
-                raise serializers.ValidationError(
-                    f"Invalid severity level. Valid options: {', '.join(valid_levels)}"
-                )
         return value
 
     def validate(self, attrs):
@@ -320,13 +269,13 @@ class AyurvedaModelSerializer(serializers.ModelSerializer):
         Cross-field validation for Ayurveda terms.
         """
         # At least one name should be provided
-        sanskrit_name = attrs.get("sanskrit_name")
         english_name = attrs.get("english_name")
-        devanagari_name = attrs.get("devanagari_name")
+        hindi_name = attrs.get("hindi_name")
+        diacritical_name = attrs.get("diacritical_name")
 
-        if not any([sanskrit_name, english_name, devanagari_name]):
+        if not any([english_name, hindi_name, diacritical_name]):
             raise serializers.ValidationError(
-                "At least one name (Sanskrit, English, or Devanagari) must be provided."
+                "At least one name (English, Hindi, or Diacritical) must be provided."
             )
 
         return attrs
@@ -338,41 +287,59 @@ class SiddhaModelSerializer(serializers.ModelSerializer):
     Handles Siddha medicine terminology from NAMASTE codes.
     """
 
-    # Display field for formatted name
     display_name = serializers.SerializerMethodField()
 
     class Meta:
         model = SiddhaModel
         fields = [
             "id",
-            # BaseNamasteModel fields (adjust as per your actual model)
-            "namaste_code",
-            "english_name",
+            # BaseNamasteModel fields
+            "code",
             "description",
-            "severity_level",
-            "category",
-            "created_at",
-            "updated_at",
+            "english_name",
             # SiddhaModel specific fields
             "tamil_name",
-            "sanskrit_name",
             "romanized_name",
             "reference",
-            "classical_reference",
-            "mukkutram_involvement",
-            "udal_kattugal_relation",
-            "envagai_thervugal_signs",
             "display_name",
         ]
-        read_only_fields = ["id", "created_at", "updated_at", "display_name"]
+        read_only_fields = ["id", "display_name"]
 
     def get_display_name(self, obj):
         """
         Get formatted display name for Siddha term.
         """
-        if hasattr(obj, "namaste_code") and obj.namaste_code:
-            return f"{obj.namaste_code} - {obj.english_name or obj.tamil_name}"
+        if obj.code:
+            return (
+                f"{obj.code} - {obj.english_name or obj.tamil_name or 'Unnamed Term'}"
+            )
         return obj.english_name or obj.tamil_name or "Unnamed Term"
+
+    def validate_code(self, value):
+        """
+        Validate code is unique and not empty.
+        """
+        if not value or len(value.strip()) == 0:
+            raise serializers.ValidationError("Code cannot be empty.")
+
+        # Check uniqueness
+        if self.instance and self.instance.code == value:
+            return value
+
+        if SiddhaModel.objects.filter(code=value).exists():  # type: ignore
+            raise serializers.ValidationError("A term with this code already exists.")
+
+        return value.strip()
+
+    def validate_english_name(self, value):
+        """
+        Validate English name format.
+        """
+        if value and len(value.strip()) == 0:
+            raise serializers.ValidationError(
+                "English name cannot be empty if provided."
+            )
+        return value
 
     def validate_tamil_name(self, value):
         """
@@ -382,13 +349,107 @@ class SiddhaModelSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Tamil name cannot be empty if provided.")
         return value
 
-    def validate_sanskrit_name(self, value):
+    def validate_romanized_name(self, value):
         """
-        Validate Sanskrit name format.
+        Validate romanized name format.
         """
         if value and len(value.strip()) == 0:
             raise serializers.ValidationError(
-                "Sanskrit name cannot be empty if provided."
+                "Romanized name cannot be empty if provided."
+            )
+        return value
+
+    def validate_reference(self, value):
+        """
+        Validate reference format.
+        """
+        if value and len(value.strip()) == 0:
+            return None
+        return value
+
+    def validate(self, attrs):
+        """
+        Cross-field validation for Siddha terms.
+        """
+        # At least one name should be provided
+        english_name = attrs.get("english_name")
+        tamil_name = attrs.get("tamil_name")
+
+        if not any([english_name, tamil_name]):
+            raise serializers.ValidationError(
+                "At least one name (English or Tamil) must be provided."
+            )
+
+        return attrs
+
+
+class UnaniModelSerializer(serializers.ModelSerializer):
+    """
+    Complete serializer for UnaniModel.
+    Handles Unani medicine terminology from NAMASTE codes.
+    """
+
+    display_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UnaniModel
+        fields = [
+            "id",
+            # BaseNamasteModel fields
+            "code",
+            "description",
+            "english_name",
+            # UnaniModel specific fields
+            "arabic_name",
+            "romanized_name",
+            "reference",
+            "display_name",
+        ]
+        read_only_fields = ["id", "display_name"]
+
+    def get_display_name(self, obj):
+        """
+        Get formatted display name for Unani term.
+        """
+        if obj.code:
+            return (
+                f"{obj.code} - {obj.english_name or obj.arabic_name or 'Unnamed Term'}"
+            )
+        return obj.english_name or obj.arabic_name or "Unnamed Term"
+
+    def validate_code(self, value):
+        """
+        Validate code is unique and not empty.
+        """
+        if not value or len(value.strip()) == 0:
+            raise serializers.ValidationError("Code cannot be empty.")
+
+        # Check uniqueness
+        if self.instance and self.instance.code == value:
+            return value
+
+        if UnaniModel.objects.filter(code=value).exists():  # type: ignore
+            raise serializers.ValidationError("A term with this code already exists.")
+
+        return value.strip()
+
+    def validate_english_name(self, value):
+        """
+        Validate English name format.
+        """
+        if value and len(value.strip()) == 0:
+            raise serializers.ValidationError(
+                "English name cannot be empty if provided."
+            )
+        return value
+
+    def validate_arabic_name(self, value):
+        """
+        Validate Arabic name format.
+        """
+        if value and len(value.strip()) == 0:
+            raise serializers.ValidationError(
+                "Arabic name cannot be empty if provided."
             )
         return value
 
@@ -402,120 +463,25 @@ class SiddhaModelSerializer(serializers.ModelSerializer):
             )
         return value
 
-    def validate_mukkutram_involvement(self, value):
+    def validate_reference(self, value):
         """
-        Validate Mukkutram (three humors) involvement in Siddha system.
-        Vatham, Pitham, Kapham correspond to Vata, Pitta, Kapha in Ayurveda.
+        Validate reference format.
         """
-        if value:
-            valid_mukkutram = [
-                "vatham",
-                "pitham",
-                "kapham",
-                "vatham-pitham",
-                "pitham-kapham",
-                "vatham-kapham",
-                "mukkutram",
-                "thannila-mukkutram",
-            ]
-            mukkutram_lower = value.lower().strip()
-            if mukkutram_lower not in valid_mukkutram:
-                raise serializers.ValidationError(
-                    f"Invalid Mukkutram involvement '{value}'. Valid options: {', '.join(valid_mukkutram)}"
-                )
-            return mukkutram_lower
-        return value
-
-    def validate_udal_kattugal_relation(self, value):
-        """
-        Validate Udal Kattugal (seven body constituents) relation.
-        """
-        if value:
-            valid_udal_kattugal = [
-                "saaram",
-                "senneer",
-                "oon",
-                "kozhuppu",
-                "enbu",
-                "moolai",
-                "sukkilam",
-                "suronitham",
-            ]
-
-            # Allow multiple constituents separated by comma or semicolon
-            constituents = [
-                c.strip().lower()
-                for c in value.replace(";", ",").split(",")
-                if c.strip()
-            ]
-
-            for constituent in constituents:
-                if constituent not in valid_udal_kattugal:
-                    raise serializers.ValidationError(
-                        f"Invalid Udal Kattugal constituent '{constituent}'. "
-                        f"Valid options: {', '.join(valid_udal_kattugal)}"
-                    )
-
-            return ", ".join(constituents)
-        return value
-
-    def validate_envagai_thervugal_signs(self, value):
-        """
-        Validate Envagai Thervugal (eight diagnostic methods) signs.
-        """
-        if value:
-            valid_envagai = [
-                "naadi",
-                "sparisam",
-                "naa",
-                "niram",
-                "mozhi",
-                "vizhi",
-                "malam",
-                "moothiram",
-            ]
-
-            # Allow multiple signs separated by comma or semicolon
-            signs = [
-                s.strip().lower()
-                for s in value.replace(";", ",").split(",")
-                if s.strip()
-            ]
-
-            for sign in signs:
-                if sign not in valid_envagai:
-                    raise serializers.ValidationError(
-                        f"Invalid Envagai Thervugal sign '{sign}'. "
-                        f"Valid options: {', '.join(valid_envagai)}"
-                    )
-
-            return ", ".join(signs)
-        return value
-
-    def validate_severity_level(self, value):
-        """
-        Validate severity level.
-        """
-        if value:
-            valid_levels = ["mild", "moderate", "severe", "critical"]
-            if value.lower() not in valid_levels:
-                raise serializers.ValidationError(
-                    f"Invalid severity level. Valid options: {', '.join(valid_levels)}"
-                )
+        if value and len(value.strip()) == 0:
+            return None
         return value
 
     def validate(self, attrs):
         """
-        Cross-field validation for Siddha terms.
+        Cross-field validation for Unani terms.
         """
         # At least one name should be provided
-        tamil_name = attrs.get("tamil_name")
         english_name = attrs.get("english_name")
-        sanskrit_name = attrs.get("sanskrit_name")
+        arabic_name = attrs.get("arabic_name")
 
-        if not any([tamil_name, english_name, sanskrit_name]):
+        if not any([english_name, arabic_name]):
             raise serializers.ValidationError(
-                "At least one name (Tamil, English, or Sanskrit) must be provided."
+                "At least one name (English or Arabic) must be provided."
             )
 
         return attrs
