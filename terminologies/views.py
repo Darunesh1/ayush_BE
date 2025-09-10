@@ -36,14 +36,22 @@ def ayurvedha_fuzzy_search(request):
 
         queryset = (fuzzy_qs | exact_qs).distinct()
 
+        # queryset = queryset.annotate(
+        #     max_similarity=(
+        #         TrigramSimilarity("code", search_term)
+        #         + TrigramSimilarity("english_name", search_term)
+        #         + TrigramSimilarity("hindi_name", search_term)
+        #         + TrigramSimilarity("diacritical_name", search_term)
+        #     )
+        # ).order_by("-max_similarity", "code")
         queryset = queryset.annotate(
-            max_similarity=(
-                TrigramSimilarity("code", search_term)
-                + TrigramSimilarity("english_name", search_term)
-                + TrigramSimilarity("hindi_name", search_term)
-                + TrigramSimilarity("diacritical_name", search_term)
+            weighted_score=(
+                TrigramSimilarity("english_name", search_term) * 2.5
+                + TrigramSimilarity("code", search_term) * 1.0
+                + TrigramSimilarity("hindi_name", search_term) * 0.8
+                + TrigramSimilarity("diacritical_name", search_term) * 0.8
             )
-        ).order_by("-max_similarity", "code")
+        ).order_by("-weighted_score", "code")
 
     paginator = PageNumberPagination()
     paginator.page_size = 20
