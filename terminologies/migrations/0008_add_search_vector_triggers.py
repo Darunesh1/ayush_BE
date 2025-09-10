@@ -21,7 +21,7 @@ class Migration(migrations.Migration):
                   setweight(to_tsvector('english', coalesce(NEW.hindi_name, '')), 'C') ||
                   setweight(to_tsvector('english', coalesce(NEW.diacritical_name, '')), 'D');
               RETURN NEW;
-            ENA
+            END;
             $$ LANGUAGE plpgsql;
             CREATE TRIGGER ayurveda_search_vector_trigger
             BEFORE INSERT OR UPDATE ON ayurveda_terms
@@ -45,11 +45,11 @@ class Migration(migrations.Migration):
                   setweight(to_tsvector('english', coalesce(NEW.romanized_name, '')), 'D') ||
                   setweight(to_tsvector('english', coalesce(NEW.reference, '')), 'D');
               RETURN NEW;
-            END
+            END;
             $$ LANGUAGE plpgsql;
             CREATE TRIGGER siddha_search_vector_trigger
             BEFORE INSERT OR UPDATE ON siddha_terms
-            FOR EACH ROW EXECUTE FUNCTION siddha_search_vector_update()B
+            FOR EACH ROW EXECUTE FUNCTION siddha_search_vector_update();
             """,
             reverse_sql="""
             DROP TRIGGER IF EXISTS siddha_search_vector_trigger ON siddha_terms;
@@ -69,7 +69,7 @@ class Migration(migrations.Migration):
                   setweight(to_tsvector('english', coalesce(NEW.romanized_name, '')), 'D') ||
                   setweight(to_tsvector('english', coalesce(NEW.reference, '')), 'D');
               RETURN NEW;
-            END
+            END;
             $$ LANGUAGE plpgsql;
             CREATE TRIGGER unani_search_vector_trigger
             BEFORE INSERT OR UPDATE ON unani_terms
@@ -91,7 +91,7 @@ class Migration(migrations.Migration):
                   setweight(to_tsvector('english', coalesce(NEW.title, '')), 'A') ||
                   setweight(to_tsvector('english', coalesce(NEW.primary_location, '')), 'C');
               RETURN NEW;
-            END
+            END;
             $$ LANGUAGE plpgsql;
             CREATE TRIGGER icd11_search_vector_trigger
             BEFORE INSERT OR UPDATE ON icd11_terms
