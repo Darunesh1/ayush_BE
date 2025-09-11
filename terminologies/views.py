@@ -227,28 +227,32 @@ def icd11_advanced_search(request):
     if not search_term:
         queryset = ICD11Term.objects.all().order_by("code")
     else:
-        fuzzy_qs = ICD11Term.objects.annotate(
-            similarity_code=TrigramSimilarity("code", search_term),
-            similarity_title=TrigramSimilarity("title", search_term),
-            similarity_location=TrigramSimilarity("primary_location", search_term),
-        ).filter(
-            Q(similarity_code__gt=0.1)
-            | Q(similarity_title__gt=0.1)
-            | Q(similarity_location__gt=0.1)
-        )
-        exact_qs = ICD11Term.objects.filter(
-            Q(code__iexact=search_term)
-            | Q(title__icontains=search_term)
-            | Q(primary_location__icontains=search_term)
-        )
-        queryset = (fuzzy_qs | exact_qs).distinct()
-        queryset = queryset.annotate(
-            weighted_score=(
-                TrigramSimilarity("title", search_term) * 3.0
-                + TrigramSimilarity("code", search_term) * 2.0
-                + TrigramSimilarity("primary_location", search_term) * 0.5
+        # Single query approach - no UNION needed
+        queryset = (
+            ICD11Term.objects.filter(
+                Q(code__icontains=search_term)
+                | Q(title__icontains=search_term)
+                | Q(primary_location__icontains=search_term)
             )
-        ).order_by("-weighted_score", "code")
+            .annotate(
+                # Single consistent annotation for all results
+                weighted_score=Case(
+                    # Exact matches get highest priority
+                    When(title__iexact=search_term, then=Value(10.0)),
+                    When(code__iexact=search_term, then=Value(9.0)),
+                    # Starts with gets medium priority
+                    When(title__istartswith=search_term, then=Value(8.0)),
+                    When(code__istartswith=search_term, then=Value(7.0)),
+                    # Contains gets lower priority
+                    When(title__icontains=search_term, then=Value(6.0)),
+                    When(code__icontains=search_term, then=Value(5.0)),
+                    When(primary_location__icontains=search_term, then=Value(4.0)),
+                    default=Value(1.0),
+                    output_field=FloatField(),
+                )
+            )
+            .order_by("-weighted_score", "code")
+        )
 
     # Apply filters
     if chapter_filter:
