@@ -407,6 +407,30 @@ class SiddhaSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class SiddhaListSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for Siddha model list views.
+    Only includes essential fields for listing Siddha medicine terminology.
+    """
+
+    class Meta:
+        model = Siddha
+        fields = [
+            "id",
+            "code",
+            "english_name",
+            "tamil_name",
+            "romanized_name",
+        ]
+        read_only_fields = [
+            "id",
+            "code",
+            "english_name",
+            "tamil_name",
+            "romanized_name",
+        ]
+
+
 class UnaniSerializer(serializers.ModelSerializer):
     """
     Complete serializer for UnaniModel.
@@ -509,3 +533,27 @@ class UnaniSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+
+
+class UnaniListSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for Unani model list views.
+    Only includes essential fields for listing Unani medicine terminology.
+    """
+
+    class Meta:
+        model = Unani
+        fields = [
+            "id",
+            "code",
+            "english_name",
+            "arabic_name",
+            "romanized_name",
+        ]
+        read_only_fields = [
+            "id",
+            "code",
+            "english_name",
+            "arabic_name",
+            "romanized_name",
+        ]
