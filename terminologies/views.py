@@ -4,10 +4,11 @@ from rest_framework.decorators import api_view
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
-from .models import Ayurvedha, Siddha, Unani
+from .models import Ayurvedha, ICD11Term, Siddha, Unani
 from .serializers import (
     AyurvedhaListSerializer,
     AyurvedhaSerializer,
+    ICD11TermListSerializer,
     SiddhaListSerializer,
     UnaniListSerializer,
 )
@@ -212,4 +213,62 @@ def unani_fuzzy_search(request):
     paginator.page_size = 20
     page = paginator.paginate_queryset(queryset, request)
     serializer = UnaniListSerializer(page, many=True)
+    return paginator.get_paginated_response(serializer.data)
+
+
+@api_view(["GET"])
+def icd11_advanced_search(request):
+    search_term = request.query_params.get("q", "").strip()
+    chapter_filter = request.query_params.get("chapter", "").strip()
+    is_leaf = request.query_params.get("leaf", "").lower()
+    is_residual = request.query_params.get("residual", "").lower()
+    is_tm2 = request.query_params.get("tm2", "").lower() in ["true", "1"]
+
+    if not search_term:
+        queryset = ICD11Term.objects.all().order_by("code")
+    else:
+        fuzzy_qs = ICD11Term.objects.annotate(
+            similarity_code=TrigramSimilarity("code", search_term),
+            similarity_title=TrigramSimilarity("title", search_term),
+            similarity_location=TrigramSimilarity("primary_location", search_term),
+        ).filter(
+            Q(similarity_code__gt=0.1)
+            | Q(similarity_title__gt=0.1)
+            | Q(similarity_location__gt=0.1)
+        )
+        exact_qs = ICD11Term.objects.filter(
+            Q(code__iexact=search_term)
+            | Q(title__icontains=search_term)
+            | Q(primary_location__icontains=search_term)
+        )
+        queryset = (fuzzy_qs | exact_qs).distinct()
+        queryset = queryset.annotate(
+            weighted_score=(
+                TrigramSimilarity("title", search_term) * 3.0
+                + TrigramSimilarity("code", search_term) * 2.0
+                + TrigramSimilarity("primary_location", search_term) * 0.5
+            )
+        ).order_by("-weighted_score", "code")
+
+    # Apply filters
+    if chapter_filter:
+        queryset = queryset.filter(chapter_no=chapter_filter)
+
+    if is_tm2:
+        queryset = queryset.filter(chapter_no="26")
+
+    if is_leaf in ["true", "1"]:
+        queryset = queryset.filter(is_leaf=True)
+    elif is_leaf in ["false", "0"]:
+        queryset = queryset.filter(is_leaf=False)
+
+    if is_residual in ["true", "1"]:
+        queryset = queryset.filter(is_residual=True)
+    elif is_residual in ["false", "0"]:
+        queryset = queryset.filter(is_residual=False)
+
+    paginator = PageNumberPagination()
+    paginator.page_size = 20
+    page = paginator.paginate_queryset(queryset, request)
+    serializer = ICD11TermListSerializer(page, many=True)
     return paginator.get_paginated_response(serializer.data)
