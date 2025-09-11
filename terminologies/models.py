@@ -24,7 +24,7 @@ class BaseNamasteModel(models.Model):
         return f"{self.code} - {self.english_name}"
 
 
-class AyurvedhaModel(BaseNamasteModel):
+class Ayurvedha(BaseNamasteModel):
     hindi_name = models.CharField(max_length=255, null=True, blank=True, db_index=True)
     diacritical_name = models.CharField(
         max_length=255, null=True, blank=True, db_index=True
@@ -44,7 +44,7 @@ class AyurvedhaModel(BaseNamasteModel):
         ]
 
 
-class SiddhaModel(BaseNamasteModel):
+class Siddha(BaseNamasteModel):
     tamil_name = models.CharField(max_length=255, null=True, blank=True, db_index=True)
     romanized_name = models.CharField(
         max_length=255, null=True, blank=True, db_index=True
@@ -63,7 +63,7 @@ class SiddhaModel(BaseNamasteModel):
         ]
 
 
-class UnaniModel(BaseNamasteModel):
+class Unani(BaseNamasteModel):
     arabic_name = models.CharField(max_length=255, null=True, blank=True, db_index=True)
     romanized_name = models.CharField(
         max_length=255, null=True, blank=True, db_index=True
