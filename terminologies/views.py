@@ -4,7 +4,7 @@ from rest_framework.decorators import api_view
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
-from .models import AyurvedhaModel
+from .models import Ayurvedha
 from .serializers import AyurvedhaModelSerializer
 
 
@@ -13,9 +13,9 @@ def ayurvedha_fuzzy_search(request):
     search_term = request.query_params.get("q", "").strip()
 
     if not search_term:
-        queryset = AyurvedhaModel.objects.all().order_by("code")
+        queryset = Ayurvedha.objects.all().order_by("code")
     else:
-        fuzzy_qs = AyurvedhaModel.objects.annotate(
+        fuzzy_qs = Ayurvedha.objects.annotate(
             similarity_code=TrigramSimilarity("code", search_term),
             similarity_english=TrigramSimilarity("english_name", search_term),
             similarity_hindi=TrigramSimilarity("hindi_name", search_term),
@@ -27,7 +27,7 @@ def ayurvedha_fuzzy_search(request):
             | Q(similarity_diacritical__gt=0.1)
         )
 
-        exact_qs = AyurvedhaModel.objects.filter(
+        exact_qs = Ayurvedha.objects.filter(
             Q(code__iexact=search_term)
             | Q(english_name__iexact=search_term)
             | Q(hindi_name__iexact=search_term)
@@ -89,20 +89,20 @@ def ayurvedha_autocomplete(request):
 
 def get_autocomplete_queryset(search_term, limit):
     # Exact matches first (fastest)
-    exact_qs = AyurvedhaModel.objects.filter(
+    exact_qs = Ayurvedha.objects.filter(
         Q(code__iexact=search_term) | Q(english_name__iexact=search_term)
     ).only("id", "code", "english_name", "hindi_name")
 
     # Prefix matches (fast with indexes)
-    prefix_qs = AyurvedhaModel.objects.filter(
+    prefix_qs = Ayurvedha.objects.filter(
         Q(code__istartswith=search_term) | Q(english_name__istartswith=search_term)
     ).only("id", "code", "english_name", "hindi_name")
 
     # Fuzzy matches (only for 3+ characters)
-    fuzzy_qs = AyurvedhaModel.objects.none()
+    fuzzy_qs = Ayurvedha.objects.none()
     if len(search_term) >= 3:
         fuzzy_qs = (
-            AyurvedhaModel.objects.annotate(
+            Ayurvedha.objects.annotate(
                 eng_sim=TrigramSimilarity("english_name", search_term),
                 code_sim=TrigramSimilarity("code", search_term),
             )

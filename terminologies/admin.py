@@ -1,28 +1,28 @@
 from django.contrib import admin
 
 from .models import (
-    AyurvedhaModel,
+    Ayurvedha,
     ICD11Term,
     ICDClassKind,
-    SiddhaModel,
-    UnaniModel,
+    Siddha,
+    Unani,
 )
 
 
-@admin.register(AyurvedhaModel)
-class AyurvedhaModelAdmin(admin.ModelAdmin):
+@admin.register(Ayurvedha)
+class AyurvedhaAdmin(admin.ModelAdmin):
     list_display = ("code", "english_name", "hindi_name", "diacritical_name")
     search_fields = ("code", "english_name", "hindi_name", "diacritical_name")
 
 
-@admin.register(SiddhaModel)
-class SiddhaModelAdmin(admin.ModelAdmin):
+@admin.register(Siddha)
+class SiddhaAdmin(admin.ModelAdmin):
     list_display = ("code", "english_name", "tamil_name", "romanized_name")
     search_fields = ("code", "english_name", "tamil_name", "romanized_name")
 
 
-@admin.register(UnaniModel)
-class UnaniModelAdmin(admin.ModelAdmin):
+@admin.register(Unani)
+class UnaniAdmin(admin.ModelAdmin):
     list_display = ("code", "english_name", "arabic_name", "romanized_name")
     search_fields = ("code", "english_name", "arabic_name", "romanized_name")
 

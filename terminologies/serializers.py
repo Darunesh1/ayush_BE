@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import AyurvedhaModel, ICD11Term, ICDClassKind, SiddhaModel, UnaniModel
+from .models import Ayurvedha, ICD11Term, ICDClassKind, Siddha, Unani
 
 
 class ICDClassKindSerializer(serializers.ModelSerializer):
@@ -196,7 +196,7 @@ class AyurvedhaModelSerializer(serializers.ModelSerializer):
     display_name = serializers.SerializerMethodField()
 
     class Meta:
-        model = AyurvedhaModel
+        model = Ayurvedha
         fields = [
             "id",
             # BaseNamasteModel fields
@@ -231,7 +231,7 @@ class AyurvedhaModelSerializer(serializers.ModelSerializer):
         if self.instance and self.instance.code == value:
             return value
 
-        if AyurvedhaModel.objects.filter(code=value).exists():  # type: ignore
+        if Ayurvedha.objects.filter(code=value).exists():  # type: ignore
             raise serializers.ValidationError("A term with this code already exists.")
 
         return value.strip()
@@ -290,7 +290,7 @@ class SiddhaModelSerializer(serializers.ModelSerializer):
     display_name = serializers.SerializerMethodField()
 
     class Meta:
-        model = SiddhaModel
+        model = Siddha
         fields = [
             "id",
             # BaseNamasteModel fields
@@ -326,7 +326,7 @@ class SiddhaModelSerializer(serializers.ModelSerializer):
         if self.instance and self.instance.code == value:
             return value
 
-        if SiddhaModel.objects.filter(code=value).exists():  # type: ignore
+        if Siddha.objects.filter(code=value).exists():  # type: ignore
             raise serializers.ValidationError("A term with this code already exists.")
 
         return value.strip()
@@ -392,7 +392,7 @@ class UnaniModelSerializer(serializers.ModelSerializer):
     display_name = serializers.SerializerMethodField()
 
     class Meta:
-        model = UnaniModel
+        model = Unani
         fields = [
             "id",
             # BaseNamasteModel fields
@@ -428,7 +428,7 @@ class UnaniModelSerializer(serializers.ModelSerializer):
         if self.instance and self.instance.code == value:
             return value
 
-        if UnaniModel.objects.filter(code=value).exists():  # type: ignore
+        if Unani.objects.filter(code=value).exists():  # type: ignore
             raise serializers.ValidationError("A term with this code already exists.")
 
         return value.strip()
