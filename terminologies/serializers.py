@@ -187,6 +187,32 @@ class ICD11TermSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class ICD11TermListSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for ICD11Term model list views.
+    Only includes essential fields for listing ICD-11 terms (TM2 and Biomedicine).
+    """
+
+    class Meta:
+        model = ICD11Term
+        fields = [
+            "id",
+            "foundation_uri",
+            "code",
+            "title",
+            "chapter_no",
+            "is_leaf",
+        ]
+        read_only_fields = [
+            "id",
+            "foundation_uri",
+            "code",
+            "title",
+            "chapter_no",
+            "is_leaf",
+        ]
+
+
 class AyurvedhaSerializer(serializers.ModelSerializer):
     """
     Complete serializer for AyurvedhaModel.
