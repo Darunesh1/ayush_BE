@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Ayurvedha, ICD11Term, ICDClassKind, Siddha, Unani
+from .models import Ayurvedha, ICD11Term, ICDClassKind, Siddha, TermMapping, Unani
 
 
 class ICDClassKindSerializer(serializers.ModelSerializer):
@@ -583,3 +583,288 @@ class UnaniListSerializer(serializers.ModelSerializer):
             "arabic_name",
             "romanized_name",
         ]
+
+
+class ICD11TermSummarySerializer(serializers.ModelSerializer):
+    """Lightweight ICD term for listings"""
+
+    class Meta:
+        model = ICD11Term
+        fields = ["code", "title", "chapter_no"]
+
+
+# Dynamic NAMASTE term serializer
+class NamasteTermSerializer(serializers.Serializer):
+    """Dynamic serializer that works with any NAMASTE system"""
+
+    system = serializers.CharField()
+    code = serializers.CharField()
+    english_name = serializers.CharField()
+    description = serializers.CharField(allow_null=True)
+
+    # System-specific fields (populated dynamically)
+    hindi_name = serializers.CharField(allow_null=True, required=False)
+    diacritical_name = serializers.CharField(allow_null=True, required=False)
+    tamil_name = serializers.CharField(allow_null=True, required=False)
+    arabic_name = serializers.CharField(allow_null=True, required=False)
+    romanized_name = serializers.CharField(allow_null=True, required=False)
+    reference = serializers.CharField(allow_null=True, required=False)
+
+
+# Cross-system match serializers
+class CrossSystemMatchSerializer(serializers.Serializer):
+    """Serializer for cross-system matches"""
+
+    code = serializers.CharField()
+    english_name = serializers.CharField()
+    similarity_score = serializers.FloatField()
+
+
+class DetailedCrossSystemMatchSerializer(CrossSystemMatchSerializer):
+    """Detailed cross-system match with all fields"""
+
+    description = serializers.CharField(allow_null=True)
+
+    # System-specific fields (will be populated based on system)
+    hindi_name = serializers.CharField(allow_null=True, required=False)
+    diacritical_name = serializers.CharField(allow_null=True, required=False)
+    tamil_name = serializers.CharField(allow_null=True, required=False)
+    arabic_name = serializers.CharField(allow_null=True, required=False)
+    romanized_name = serializers.CharField(allow_null=True, required=False)
+    reference = serializers.CharField(allow_null=True, required=False)
+
+
+# Term mapping serializers
+class TermMappingSummarySerializer(serializers.ModelSerializer):
+    """Summary serializer for listings"""
+
+    source_term = serializers.SerializerMethodField()
+    icd_term = ICD11TermSummarySerializer(read_only=True)
+    confidence_score = serializers.FloatField()
+    icd_similarity = serializers.FloatField()
+
+    class Meta:
+        model = TermMapping
+        fields = [
+            "id",
+            "source_system",
+            "source_term",
+            "icd_term",
+            "confidence_score",
+            "icd_similarity",
+            "created_at",
+        ]
+
+    def get_source_term(self, obj):
+        """Get the primary source term dynamically"""
+        source_term = (
+            obj.primary_ayurveda_term
+            or obj.primary_siddha_term
+            or obj.primary_unani_term
+        )
+
+        if source_term:
+            return {"code": source_term.code, "english_name": source_term.english_name}
+        return None
+
+
+class TermMappingDetailSerializer(serializers.ModelSerializer):
+    """Detailed mapping with full information"""
+
+    source_term = serializers.SerializerMethodField()
+    icd_mapping = serializers.SerializerMethodField()
+    cross_system_matches = serializers.SerializerMethodField()
+    confidence_score = serializers.FloatField()
+    created_at = serializers.DateTimeField()
+
+    class Meta:
+        model = TermMapping
+        fields = [
+            "id",
+            "source_system",
+            "source_term",
+            "icd_mapping",
+            "cross_system_matches",
+            "confidence_score",
+            "created_at",
+        ]
+
+    def get_source_term(self, obj):
+        """Get detailed source term information"""
+        source_term = (
+            obj.primary_ayurveda_term
+            or obj.primary_siddha_term
+            or obj.primary_unani_term
+        )
+
+        if not source_term:
+            return None
+
+        base_data = {
+            "system": obj.source_system,
+            "code": source_term.code,
+            "english_name": source_term.english_name,
+            "description": source_term.description,
+        }
+
+        # Add system-specific fields
+        if obj.source_system == "ayurveda":
+            base_data.update(
+                {
+                    "hindi_name": source_term.hindi_name,
+                    "diacritical_name": source_term.diacritical_name,
+                }
+            )
+        elif obj.source_system == "siddha":
+            base_data.update(
+                {
+                    "tamil_name": source_term.tamil_name,
+                    "romanized_name": source_term.romanized_name,
+                    "reference": source_term.reference,
+                }
+            )
+        elif obj.source_system == "unani":
+            base_data.update(
+                {
+                    "arabic_name": source_term.arabic_name,
+                    "romanized_name": source_term.romanized_name,
+                    "reference": source_term.reference,
+                }
+            )
+
+        return base_data
+
+    def get_icd_mapping(self, obj):
+        """Get ICD mapping with similarity score"""
+        icd_data = ICD11TermSerializer(obj.icd_term).data
+        icd_data["similarity_score"] = round(obj.icd_similarity, 3)
+        return icd_data
+
+    def get_cross_system_matches(self, obj):
+        """Get cross-system matches"""
+        cross_matches = {}
+
+        if obj.cross_ayurveda_term:
+            cross_matches["ayurveda"] = self._serialize_cross_match(
+                obj.cross_ayurveda_term, obj.cross_ayurveda_similarity, "ayurveda"
+            )
+
+        if obj.cross_siddha_term:
+            cross_matches["siddha"] = self._serialize_cross_match(
+                obj.cross_siddha_term, obj.cross_siddha_similarity, "siddha"
+            )
+
+        if obj.cross_unani_term:
+            cross_matches["unani"] = self._serialize_cross_match(
+                obj.cross_unani_term, obj.cross_unani_similarity, "unani"
+            )
+
+        return cross_matches
+
+    def _serialize_cross_match(self, term, similarity, system):
+        """Helper to serialize cross-system match"""
+        base_data = {
+            "code": term.code,
+            "english_name": term.english_name,
+            "description": term.description,
+            "similarity_score": round(similarity, 3),
+        }
+
+        # Add system-specific fields
+        if system == "ayurveda":
+            base_data.update(
+                {
+                    "hindi_name": term.hindi_name,
+                    "diacritical_name": term.diacritical_name,
+                }
+            )
+        elif system == "siddha":
+            base_data.update(
+                {
+                    "tamil_name": term.tamil_name,
+                    "romanized_name": term.romanized_name,
+                    "reference": term.reference,
+                }
+            )
+        elif system == "unani":
+            base_data.update(
+                {
+                    "arabic_name": term.arabic_name,
+                    "romanized_name": term.romanized_name,
+                    "reference": term.reference,
+                }
+            )
+
+        return base_data
+
+
+class TermMappingSearchSerializer(serializers.ModelSerializer):
+    """Serializer for search results"""
+
+    source_term = serializers.SerializerMethodField()
+    icd_term = ICD11TermSummarySerializer(read_only=True)
+    confidence_score = serializers.FloatField()
+    icd_similarity = serializers.FloatField()
+    has_cross_matches = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TermMapping
+        fields = [
+            "id",
+            "source_system",
+            "source_term",
+            "icd_term",
+            "confidence_score",
+            "icd_similarity",
+            "has_cross_matches",
+            "created_at",
+        ]
+
+    def get_source_term(self, obj):
+        source_term = (
+            obj.primary_ayurveda_term
+            or obj.primary_siddha_term
+            or obj.primary_unani_term
+        )
+
+        if source_term:
+            return {
+                "code": source_term.code,
+                "english_name": source_term.english_name,
+                "description": source_term.description,
+            }
+        return None
+
+    def get_has_cross_matches(self, obj):
+        return any(
+            [obj.cross_ayurveda_term, obj.cross_siddha_term, obj.cross_unani_term]
+        )
+
+
+# Statistics serializers
+class MappingStatsSerializer(serializers.Serializer):
+    """Serializer for mapping statistics"""
+
+    total_mappings = serializers.IntegerField()
+    by_system = serializers.DictField()
+    confidence_distribution = serializers.DictField()
+    top_icd_matches = serializers.ListField()
+    recent_mappings = serializers.ListField()
+
+
+class TopICDMatchSerializer(serializers.Serializer):
+    """Serializer for top ICD matches statistics"""
+
+    icd_term__code = serializers.CharField()
+    icd_term__title = serializers.CharField()
+    mapping_count = serializers.IntegerField()
+
+
+class RecentMappingSerializer(serializers.Serializer):
+    """Serializer for recent mappings statistics"""
+
+    source_system = serializers.CharField()
+    source_term = serializers.CharField()
+    icd_title = serializers.CharField()
+    confidence_score = serializers.FloatField()
+    created_at = serializers.DateTimeField()
