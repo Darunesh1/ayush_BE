@@ -149,3 +149,80 @@ class ICD11Term(models.Model):
 
     def __str__(self):
         return f"{self.code} - {self.title}" if self.code else f"{self.title}"
+
+
+class TermMapping(models.Model):
+    """Store mappings starting from NAMASTE terms to ICD-11"""
+
+    # Primary NAMASTE term (the one we're mapping from)
+    primary_ayurveda_term = models.ForeignKey(
+        Ayurvedha, on_delete=models.CASCADE, null=True, blank=True
+    )
+    primary_siddha_term = models.ForeignKey(
+        Siddha, on_delete=models.CASCADE, null=True, blank=True
+    )
+    primary_unani_term = models.ForeignKey(
+        Unani, on_delete=models.CASCADE, null=True, blank=True
+    )
+
+    # Matched ICD-11 term
+    icd_term = models.ForeignKey(
+        ICD11Term, on_delete=models.CASCADE, related_name="namaste_mappings"
+    )
+    icd_similarity = models.FloatField()
+
+    # Cross-system matches (if the same concept exists in other NAMASTE systems)
+    cross_ayurveda_term = models.ForeignKey(
+        Ayurvedha,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="cross_mappings",
+    )
+    cross_siddha_term = models.ForeignKey(
+        Siddha,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="cross_mappings",
+    )
+    cross_unani_term = models.ForeignKey(
+        Unani,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="cross_mappings",
+    )
+
+    # Cross-system similarity scores
+    cross_ayurveda_similarity = models.FloatField(null=True, blank=True)
+    cross_siddha_similarity = models.FloatField(null=True, blank=True)
+    cross_unani_similarity = models.FloatField(null=True, blank=True)
+
+    # Source system identifier
+    SOURCE_CHOICES = [
+        ("ayurveda", "Ayurveda"),
+        ("siddha", "Siddha"),
+        ("unani", "Unani"),
+    ]
+    source_system = models.CharField(max_length=20, choices=SOURCE_CHOICES)
+
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    confidence_score = models.FloatField(default=0.0)
+
+    class Meta:
+        db_table = "namaste_to_icd_mappings"
+        indexes = [
+            models.Index(fields=["source_system"]),
+            models.Index(fields=["confidence_score"]),
+            models.Index(fields=["primary_ayurveda_term"]),
+            models.Index(fields=["primary_siddha_term"]),
+            models.Index(fields=["primary_unani_term"]),
+        ]
+        # Ensure uniqueness per source term
+        unique_together = [
+            ("primary_ayurveda_term", "icd_term"),
+            ("primary_siddha_term", "icd_term"),
+            ("primary_unani_term", "icd_term"),
+        ]
