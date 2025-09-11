@@ -4,8 +4,13 @@ from rest_framework.decorators import api_view
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
-from .models import Ayurvedha
-from .serializers import AyurvedhaListSerializer, AyurvedhaSerializer
+from .models import Ayurvedha, Siddha, Unani
+from .serializers import (
+    AyurvedhaListSerializer,
+    AyurvedhaSerializer,
+    SiddhaListSerializer,
+    UnaniListSerializer,
+)
 
 
 @api_view(["GET"])
@@ -128,3 +133,83 @@ def get_autocomplete_queryset(search_term, limit):
             output_field=FloatField(),
         )
     ).order_by("-autocomplete_score", "english_name")[:limit]
+
+
+@api_view(["GET"])
+def siddha_fuzzy_search(request):
+    search_term = request.query_params.get("q", "").strip()
+    if not search_term:
+        queryset = Siddha.objects.all().order_by("code")
+    else:
+        fuzzy_qs = Siddha.objects.annotate(
+            similarity_code=TrigramSimilarity("code", search_term),
+            similarity_english=TrigramSimilarity("english_name", search_term),
+            similarity_tamil=TrigramSimilarity("tamil_name", search_term),
+            similarity_romanized=TrigramSimilarity("romanized_name", search_term),
+        ).filter(
+            Q(similarity_code__gt=0.1)
+            | Q(similarity_english__gt=0.1)
+            | Q(similarity_tamil__gt=0.1)
+            | Q(similarity_romanized__gt=0.1)
+        )
+        exact_qs = Siddha.objects.filter(
+            Q(code__iexact=search_term)
+            | Q(english_name__iexact=search_term)
+            | Q(tamil_name__iexact=search_term)
+            | Q(romanized_name__iexact=search_term)
+        )
+        queryset = (fuzzy_qs | exact_qs).distinct()
+        queryset = queryset.annotate(
+            weighted_score=(
+                TrigramSimilarity("english_name", search_term) * 2.5
+                + TrigramSimilarity("code", search_term) * 1.0
+                + TrigramSimilarity("tamil_name", search_term) * 0.8
+                + TrigramSimilarity("romanized_name", search_term) * 0.8
+            )
+        ).order_by("-weighted_score", "code")
+
+    paginator = PageNumberPagination()
+    paginator.page_size = 20
+    page = paginator.paginate_queryset(queryset, request)
+    serializer = SiddhaListSerializer(page, many=True)
+    return paginator.get_paginated_response(serializer.data)
+
+
+@api_view(["GET"])
+def unani_fuzzy_search(request):
+    search_term = request.query_params.get("q", "").strip()
+    if not search_term:
+        queryset = Unani.objects.all().order_by("code")
+    else:
+        fuzzy_qs = Unani.objects.annotate(
+            similarity_code=TrigramSimilarity("code", search_term),
+            similarity_english=TrigramSimilarity("english_name", search_term),
+            similarity_arabic=TrigramSimilarity("arabic_name", search_term),
+            similarity_romanized=TrigramSimilarity("romanized_name", search_term),
+        ).filter(
+            Q(similarity_code__gt=0.1)
+            | Q(similarity_english__gt=0.1)
+            | Q(similarity_arabic__gt=0.1)
+            | Q(similarity_romanized__gt=0.1)
+        )
+        exact_qs = Unani.objects.filter(
+            Q(code__iexact=search_term)
+            | Q(english_name__iexact=search_term)
+            | Q(arabic_name__iexact=search_term)
+            | Q(romanized_name__iexact=search_term)
+        )
+        queryset = (fuzzy_qs | exact_qs).distinct()
+        queryset = queryset.annotate(
+            weighted_score=(
+                TrigramSimilarity("english_name", search_term) * 2.5
+                + TrigramSimilarity("code", search_term) * 1.0
+                + TrigramSimilarity("arabic_name", search_term) * 0.8
+                + TrigramSimilarity("romanized_name", search_term) * 0.8
+            )
+        ).order_by("-weighted_score", "code")
+
+    paginator = PageNumberPagination()
+    paginator.page_size = 20
+    page = paginator.paginate_queryset(queryset, request)
+    serializer = UnaniListSerializer(page, many=True)
+    return paginator.get_paginated_response(serializer.data)
