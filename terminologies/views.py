@@ -5,7 +5,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from .models import Ayurvedha
-from .serializers import AyurvedhaModelSerializer
+from .serializers import AyurvedhaListSerializer, AyurvedhaSerializer
 
 
 @api_view(["GET"])
@@ -57,7 +57,7 @@ def ayurvedha_fuzzy_search(request):
     paginator.page_size = 20
     page = paginator.paginate_queryset(queryset, request)
 
-    serializer = AyurvedhaModelSerializer(page, many=True)
+    serializer = AyurvedhaListSerializer(page, many=True)
     return paginator.get_paginated_response(serializer.data)
 
 

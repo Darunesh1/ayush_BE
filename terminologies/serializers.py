@@ -187,7 +187,7 @@ class ICD11TermSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class AyurvedhaModelSerializer(serializers.ModelSerializer):
+class AyurvedhaSerializer(serializers.ModelSerializer):
     """
     Complete serializer for AyurvedhaModel.
     Handles Ayurveda medicine terminology from NAMASTE codes.
@@ -281,7 +281,31 @@ class AyurvedhaModelSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class SiddhaModelSerializer(serializers.ModelSerializer):
+class AyurvedhaListSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for AyurvedhaModel list views.
+    Only includes essential fields for listing Ayurveda medicine terminology.
+    """
+
+    class Meta:
+        model = Ayurvedha
+        fields = [
+            "id",
+            "code",
+            "english_name",
+            "hindi_name",
+            "diacritical_name",
+        ]
+        read_only_fields = [
+            "id",
+            "code",
+            "english_name",
+            "hindi_name",
+            "diacritical_name",
+        ]
+
+
+class SiddhaSerializer(serializers.ModelSerializer):
     """
     Complete serializer for SiddhaModel.
     Handles Siddha medicine terminology from NAMASTE codes.
@@ -383,7 +407,7 @@ class SiddhaModelSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class UnaniModelSerializer(serializers.ModelSerializer):
+class UnaniSerializer(serializers.ModelSerializer):
     """
     Complete serializer for UnaniModel.
     Handles Unani medicine terminology from NAMASTE codes.
