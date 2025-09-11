@@ -14,4 +14,23 @@ urlpatterns = [
     path("siddha/search/", views.siddha_fuzzy_search, name="siddha_fuzzy_search"),
     path("unani/search/", views.unani_fuzzy_search, name="unani_fuzzy_search"),
     path("icd11/search/", views.icd11_advanced_search, name="icd11_advanced_search"),
+    # Mapping
+    # Get specific mapping
+    path(
+        "mappings/",
+        views.search_namaste_mappings,
+        name="get_namaste_mapping",
+    ),
+    # Search mappings
+    path("mappings/search/", views.search_mappings, name="search_mappings"),
+    # List all mappings with filters
+    path("mappings/list", views.list_mappings, name="list_mappings"),
+    # Detailed mapping view
+    path(
+        "mappings/details/<int:mapping_id>/",
+        views.mapping_details,
+        name="mapping_details",
+    ),
+    # Statistics
+    path("mappings/stats/", views.mapping_statistics, name="mapping_statistics"),
 ]
