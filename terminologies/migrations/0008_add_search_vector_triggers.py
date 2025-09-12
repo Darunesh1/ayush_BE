@@ -87,7 +87,6 @@ class Migration(migrations.Migration):
             BEGIN
               NEW.search_vector :=
                   setweight(to_tsvector('english', coalesce(NEW.code, '')), 'A') ||
-                  setweight(to_tsvector('english', coalesce(NEW.description, '')), 'B') ||
                   setweight(to_tsvector('english', coalesce(NEW.title, '')), 'A') ||
                   setweight(to_tsvector('english', coalesce(NEW.primary_location, '')), 'C');
               RETURN NEW;
