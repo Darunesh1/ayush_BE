@@ -1,6 +1,6 @@
 from django.contrib.postgres.search import SearchQuery, SearchRank, TrigramSimilarity
 from django.core.paginator import Paginator
-from django.db.models import Case, Count, FloatField, Q, Value, When
+from django.db.models import Case, Count, F, FloatField, Q, Value, When
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view
 from rest_framework.pagination import PageNumberPagination
@@ -227,35 +227,30 @@ def unani_fuzzy_search(request):
 def icd11_advanced_search(request):
     search_term = request.query_params.get("q", "").strip()
     use_fuzzy = request.query_params.get("fuzzy", "").lower() in ["true", "1"]
-
-    # Note: Removed filters that don't exist in new model:
-    # - chapter_filter (no chapter_no field)
-    # - is_leaf (no is_leaf field)
-    # - is_residual (no is_residual field)
-    # - is_tm2 (no chapter_no field to filter on "26")
+    similarity_threshold = float(request.query_params.get("threshold", "0.2"))
 
     if not search_term:
         queryset = ICD11Term.objects.all().order_by("code")
     else:
         if use_fuzzy:
-            # Use full-text search with search_vector fields
-            search_query = SearchQuery(search_term)
-
-            # Search terms and their synonyms using search vectors
+            # Use only trigram similarity (more reliable)
             queryset = (
-                ICD11Term.objects.filter(
-                    Q(search_vector=search_query)
-                    | Q(synonyms__search_vector=search_query)
+                ICD11Term.objects.annotate(
+                    code_sim=TrigramSimilarity("code", search_term),
+                    title_sim=TrigramSimilarity("title", search_term),
+                    synonym_sim=TrigramSimilarity("synonyms__label", search_term),
+                )
+                .filter(
+                    Q(code_sim__gte=similarity_threshold)
+                    | Q(title_sim__gte=similarity_threshold)
+                    | Q(synonym_sim__gte=similarity_threshold)
                 )
                 .distinct()
                 .annotate(
-                    # Calculate relevance score using search rank
-                    search_rank=SearchRank("search_vector", search_query)
-                    + SearchRank("synonyms__search_vector", search_query)
+                    total_similarity=F("code_sim") + F("title_sim") + F("synonym_sim")
                 )
-                .order_by("-search_rank", "code")
+                .order_by("-total_similarity", "code")
             )
-
         else:
             # Use traditional icontains search with trigram similarity
             term_filter = Q(code__icontains=search_term) | Q(
