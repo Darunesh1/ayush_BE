@@ -109,7 +109,6 @@ class ICD11Synonym(models.Model):
         ICD11Term, on_delete=models.CASCADE, related_name="synonyms"
     )
     label = models.CharField(max_length=255, db_index=True)
-    # ✅ ADD THIS FIELD
     search_vector = SearchVectorField(null=True, blank=True)
 
     class Meta:

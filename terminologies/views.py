@@ -1,4 +1,4 @@
-from django.contrib.postgres.search import TrigramSimilarity
+from django.contrib.postgres.search import SearchQuery, SearchRank, TrigramSimilarity
 from django.core.paginator import Paginator
 from django.db.models import Case, Count, FloatField, Q, Value, When
 from django.shortcuts import get_object_or_404
@@ -226,58 +226,70 @@ def unani_fuzzy_search(request):
 @api_view(["GET"])
 def icd11_advanced_search(request):
     search_term = request.query_params.get("q", "").strip()
-    chapter_filter = request.query_params.get("chapter", "").strip()
-    is_leaf = request.query_params.get("leaf", "").lower()
-    is_residual = request.query_params.get("residual", "").lower()
-    is_tm2 = request.query_params.get("tm2", "").lower() in ["true", "1"]
+    use_fuzzy = request.query_params.get("fuzzy", "").lower() in ["true", "1"]
+
+    # Note: Removed filters that don't exist in new model:
+    # - chapter_filter (no chapter_no field)
+    # - is_leaf (no is_leaf field)
+    # - is_residual (no is_residual field)
+    # - is_tm2 (no chapter_no field to filter on "26")
 
     if not search_term:
         queryset = ICD11Term.objects.all().order_by("code")
     else:
-        # Single query approach - no UNION needed
-        queryset = (
-            ICD11Term.objects.filter(
-                Q(code__icontains=search_term)
-                | Q(title__icontains=search_term)
-                | Q(primary_location__icontains=search_term)
-            )
-            .annotate(
-                # Single consistent annotation for all results
-                weighted_score=Case(
-                    # Exact matches get highest priority
-                    When(title__iexact=search_term, then=Value(10.0)),
-                    When(code__iexact=search_term, then=Value(9.0)),
-                    # Starts with gets medium priority
-                    When(title__istartswith=search_term, then=Value(8.0)),
-                    When(code__istartswith=search_term, then=Value(7.0)),
-                    # Contains gets lower priority
-                    When(title__icontains=search_term, then=Value(6.0)),
-                    When(code__icontains=search_term, then=Value(5.0)),
-                    When(primary_location__icontains=search_term, then=Value(4.0)),
-                    default=Value(1.0),
-                    output_field=FloatField(),
+        if use_fuzzy:
+            # Use full-text search with search_vector fields
+            search_query = SearchQuery(search_term)
+
+            # Search terms and their synonyms using search vectors
+            queryset = (
+                ICD11Term.objects.filter(
+                    Q(search_vector=search_query)
+                    | Q(synonyms__search_vector=search_query)
                 )
+                .distinct()
+                .annotate(
+                    # Calculate relevance score using search rank
+                    search_rank=SearchRank("search_vector", search_query)
+                    + SearchRank("synonyms__search_vector", search_query)
+                )
+                .order_by("-search_rank", "code")
             )
-            .order_by("-weighted_score", "code")
-        )
 
-    # Apply filters
-    if chapter_filter:
-        queryset = queryset.filter(chapter_no=chapter_filter)
+        else:
+            # Use traditional icontains search with trigram similarity
+            term_filter = Q(code__icontains=search_term) | Q(
+                title__icontains=search_term
+            )
 
-    if is_tm2:
-        queryset = queryset.filter(chapter_no="26")
+            # Search synonym labels via reverse relation
+            synonym_filter = Q(synonyms__label__icontains=search_term)
 
-    if is_leaf in ["true", "1"]:
-        queryset = queryset.filter(is_leaf=True)
-    elif is_leaf in ["false", "0"]:
-        queryset = queryset.filter(is_leaf=False)
+            queryset = (
+                ICD11Term.objects.filter(term_filter | synonym_filter)
+                .distinct()
+                .annotate(
+                    weighted_score=Case(
+                        # Exact matches get highest priority
+                        When(title__iexact=search_term, then=Value(10.0)),
+                        When(code__iexact=search_term, then=Value(9.0)),
+                        When(synonyms__label__iexact=search_term, then=Value(8.5)),
+                        # Starts with gets medium priority
+                        When(title__istartswith=search_term, then=Value(8.0)),
+                        When(code__istartswith=search_term, then=Value(7.0)),
+                        When(synonyms__label__istartswith=search_term, then=Value(6.5)),
+                        # Contains gets lower priority
+                        When(title__icontains=search_term, then=Value(6.0)),
+                        When(code__icontains=search_term, then=Value(5.0)),
+                        When(synonyms__label__icontains=search_term, then=Value(4.5)),
+                        default=Value(1.0),
+                        output_field=FloatField(),
+                    )
+                )
+                .order_by("-weighted_score", "code")
+            )
 
-    if is_residual in ["true", "1"]:
-        queryset = queryset.filter(is_residual=True)
-    elif is_residual in ["false", "0"]:
-        queryset = queryset.filter(is_residual=False)
-
+    # Pagination
     paginator = PageNumberPagination()
     paginator.page_size = 20
     page = paginator.paginate_queryset(queryset, request)
