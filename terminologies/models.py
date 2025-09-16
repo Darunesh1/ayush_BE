@@ -82,42 +82,12 @@ class Unani(BaseNamasteModel):
         ]
 
 
-class ICDClassKind(models.Model):
-    name = models.CharField(max_length=50, unique=True, db_index=True)
-    description = models.TextField(null=True, blank=True)
-
-    class Meta:
-        db_table = "icd_class_kinds"
-        verbose_name = "ICD Class Kind"
-        verbose_name_plural = "ICD Class Kinds"
-
-    def __str__(self):
-        return f"{self.name}"
-
-
 class ICD11Term(models.Model):
     foundation_uri = models.URLField(max_length=500, unique=True)
-    linearization_uri = models.URLField(max_length=500, null=True, blank=True)
     code = models.CharField(max_length=50, null=True, blank=True, db_index=True)
     title = models.CharField(max_length=255, db_index=True)
-    class_kind = models.ForeignKey(
-        ICDClassKind,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="terms",
-    )
-    depth_in_kind = models.PositiveIntegerField(null=True, blank=True)
-    is_residual = models.BooleanField(default=False, db_index=True)
-    primary_location = models.CharField(max_length=255, null=True, blank=True)
-    chapter_no = models.CharField(max_length=50, null=True, blank=True, db_index=True)
-    browser_link = models.URLField(max_length=500, null=True, blank=True)
-    icat_link = models.URLField(max_length=500, null=True, blank=True)
-    is_leaf = models.BooleanField(default=False, db_index=True)
-    no_of_non_residual_children = models.PositiveIntegerField(null=True, blank=True)
-    version_date = models.DateField(null=True, blank=True)
 
-    # Pre-computed search vector for full-text search
+    # For fuzzy/full-text search
     search_vector = SearchVectorField(null=True, blank=True)
 
     class Meta:
@@ -125,30 +95,34 @@ class ICD11Term(models.Model):
         verbose_name = "ICD-11 Term"
         verbose_name_plural = "ICD-11 Terms"
         indexes = [
-            # Standard indexes for common queries
             models.Index(fields=["code"]),
             models.Index(fields=["title"]),
-            models.Index(fields=["chapter_no"]),
-            models.Index(fields=["code", "title"]),
-            models.Index(fields=["chapter_no", "is_leaf"]),
-            models.Index(fields=["is_residual", "chapter_no"]),
-            # GIN index for search vector
             GinIndex(fields=["search_vector"], name="icd11_search_gin"),
         ]
 
-        # Add database constraints
-        constraints = [
-            models.CheckConstraint(
-                check=models.Q(depth_in_kind__gte=0), name="positive_depth_in_kind"
-            ),
-            models.CheckConstraint(
-                check=models.Q(no_of_non_residual_children__gte=0),
-                name="positive_children_count",
-            ),
+    def __str__(self):
+        return f"{self.code} - {self.title}" if self.code else self.title
+
+
+class ICD11Synonym(models.Model):
+    term = models.ForeignKey(
+        ICD11Term, on_delete=models.CASCADE, related_name="synonyms"
+    )
+    label = models.CharField(max_length=255, db_index=True)
+    # ✅ ADD THIS FIELD
+    search_vector = SearchVectorField(null=True, blank=True)
+
+    class Meta:
+        db_table = "icd11_synonyms"
+        verbose_name = "ICD-11 Synonym"
+        verbose_name_plural = "ICD-11 Synonyms"
+        indexes = [
+            models.Index(fields=["label"]),
+            GinIndex(fields=["search_vector"], name="icd11_synonym_search_gin"),
         ]
 
     def __str__(self):
-        return f"{self.code} - {self.title}" if self.code else f"{self.title}"
+        return self.label
 
 
 class TermMapping(models.Model):
