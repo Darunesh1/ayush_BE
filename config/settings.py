@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 
+from celery import Celery
 from dotenv import load_dotenv
 
 load_dotenv()  # take environment variables from .env.
@@ -31,6 +32,19 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 
 ALLOWED_HOSTS = ["*"]
+
+# Celery Configurations
+
+# set default Django settings
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+
+app = Celery("config")
+
+# Load settings from Django
+app.config_from_object("django.conf:settings", namespace="CELERY")
+
+# Discover tasks inside apps/tasks.py
+app.autodiscover_tasks()
 
 
 # Application definition
