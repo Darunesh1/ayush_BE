@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "celery[redis]>=5.5.3",
     "django>=5.2.5",
     "django-admin-interface>=0.30.1",
     "django-colorfield>=0.14.0",
