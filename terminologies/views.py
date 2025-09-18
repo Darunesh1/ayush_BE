@@ -7,7 +7,12 @@ from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
 
 # ADD THESE IMPORTS FOR drf-spectacular
-from drf_spectacular.utils import OpenApiParameter, extend_schema
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+)
 from rest_framework.decorators import api_view
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
@@ -244,87 +249,291 @@ def siddha_fuzzy_search(request):
 
 @extend_schema(
     summary="Unani Fuzzy Search",
-    description="Perform fuzzy search on Unani terms using PostgreSQL pg_trgm extension",
+    description="Perform fuzzy search on Unani terms using PostgreSQL pg_trgm extension with multilingual support",
     parameters=[
         OpenApiParameter(
             name="q",
             type=OpenApiTypes.STR,
             location=OpenApiParameter.QUERY,
-            description="Search term for fuzzy matching",
+            description="Search term for fuzzy matching across English, Arabic, and romanized names",
+            required=False,
+            examples=[
+                OpenApiExample("English term", value="fever"),
+                OpenApiExample("Arabic term", value="حمى"),
+                OpenApiExample("Code search", value="U001"),
+            ],
+        ),
+        OpenApiParameter(
+            name="threshold",
+            type=OpenApiTypes.FLOAT,
+            location=OpenApiParameter.QUERY,
+            description="Similarity threshold for fuzzy matching, range 0.0-1.0 (default: 0.1)",
+            required=False,
+            examples=[
+                OpenApiExample("Strict matching", value=0.3),
+                OpenApiExample("Loose matching", value=0.05),
+            ],
+        ),
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Page number for pagination (default: 1)",
             required=False,
         ),
     ],
-    responses={200: UnaniListSerializer(many=True)},
+    responses={
+        200: OpenApiResponse(
+            description="Paginated fuzzy search results with weighted scoring",
+            response={
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "description": "Total number of matching Unani terms",
+                    },
+                    "next": {
+                        "type": "string",
+                        "nullable": True,
+                        "description": "URL for next page",
+                    },
+                    "previous": {
+                        "type": "string",
+                        "nullable": True,
+                        "description": "URL for previous page",
+                    },
+                    "results": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "integer"},
+                                "code": {"type": "string"},
+                                "english_name": {"type": "string", "nullable": True},
+                                "arabic_name": {"type": "string", "nullable": True},
+                                "romanized_name": {"type": "string", "nullable": True},
+                            },
+                        },
+                    },
+                },
+            },
+        ),
+        400: OpenApiResponse(
+            description="Bad request - invalid parameters",
+            examples=[
+                OpenApiExample(
+                    "Invalid threshold",
+                    value={"error": "Threshold must be between 0.0 and 1.0"},
+                )
+            ],
+        ),
+        500: OpenApiResponse(
+            description="Internal server error",
+        ),
+    },
     tags=["Unani"],
+    operation_id="unani_fuzzy_search",
 )
 @api_view(["GET"])
 def unani_fuzzy_search(request):
+    """
+    Perform fuzzy search on Unani medicine terms with multilingual support.
+
+    Features:
+    - Searches across code, English name, Arabic name, and romanized name
+    - Uses PostgreSQL trigram similarity for fuzzy matching
+    - Weighted scoring with English names prioritized
+    - Combines fuzzy and exact matching for comprehensive results
+    - Configurable similarity threshold
+    """
     search_term = request.query_params.get("q", "").strip()
+    similarity_threshold = float(request.query_params.get("threshold", "0.1"))
+
+    # Validate threshold parameter
+    if not (0.0 <= similarity_threshold <= 1.0):
+        return Response({"error": "Threshold must be between 0.0 and 1.0"}, status=400)
+
     if not search_term:
         queryset = Unani.objects.all().order_by("code")
     else:
+        # Fuzzy search using trigram similarity
         fuzzy_qs = Unani.objects.annotate(
             similarity_code=TrigramSimilarity("code", search_term),
             similarity_english=TrigramSimilarity("english_name", search_term),
             similarity_arabic=TrigramSimilarity("arabic_name", search_term),
             similarity_romanized=TrigramSimilarity("romanized_name", search_term),
         ).filter(
-            Q(similarity_code__gt=0.1)
-            | Q(similarity_english__gt=0.1)
-            | Q(similarity_arabic__gt=0.1)
-            | Q(similarity_romanized__gt=0.1)
+            Q(similarity_code__gt=similarity_threshold)
+            | Q(similarity_english__gt=similarity_threshold)
+            | Q(similarity_arabic__gt=similarity_threshold)
+            | Q(similarity_romanized__gt=similarity_threshold)
         )
+
+        # Exact matches (case-insensitive)
         exact_qs = Unani.objects.filter(
             Q(code__iexact=search_term)
             | Q(english_name__iexact=search_term)
             | Q(arabic_name__iexact=search_term)
             | Q(romanized_name__iexact=search_term)
         )
+
+        # Combine and deduplicate results
         queryset = (fuzzy_qs | exact_qs).distinct()
+
+        # Apply weighted scoring for relevance ranking
         queryset = queryset.annotate(
             weighted_score=(
-                TrigramSimilarity("english_name", search_term) * 2.5
-                + TrigramSimilarity("code", search_term) * 1.0
-                + TrigramSimilarity("arabic_name", search_term) * 0.8
-                + TrigramSimilarity("romanized_name", search_term) * 0.8
+                TrigramSimilarity("english_name", search_term)
+                * 2.5  # Prioritize English
+                + TrigramSimilarity("code", search_term)
+                * 1.0  # Standard weight for codes
+                + TrigramSimilarity("arabic_name", search_term)
+                * 0.8  # Slightly lower for Arabic
+                + TrigramSimilarity("romanized_name", search_term)
+                * 0.8  # Equal to Arabic
             )
         ).order_by("-weighted_score", "code")
 
+    # Pagination
     paginator = PageNumberPagination()
     paginator.page_size = 20
     page = paginator.paginate_queryset(queryset, request)
+
+    # Serialize results
     serializer = UnaniListSerializer(page, many=True)
     return paginator.get_paginated_response(serializer.data)
 
 
 @extend_schema(
     summary="ICD-11 Advanced Search",
-    description="Advanced search through ICD-11 terms including Traditional Medicine Module 2",
+    description="Advanced search through ICD-11 terms including Traditional Medicine Module 2 with fuzzy matching, full-text search, and JSON field support",
     parameters=[
         OpenApiParameter(
             name="q",
             type=OpenApiTypes.STR,
             location=OpenApiParameter.QUERY,
-            description="Search term",
+            description="Search term to query across codes, titles, definitions, and JSON fields",
             required=False,
+            examples=[
+                OpenApiExample(
+                    "Basic search", value="diabetes", description="Simple text search"
+                ),
+                OpenApiExample(
+                    "Code search", value="E10", description="Search by ICD code"
+                ),
+                OpenApiExample(
+                    "Complex term",
+                    value="blood cancer",
+                    description="Multi-word medical term",
+                ),
+            ],
         ),
         OpenApiParameter(
             name="fuzzy",
             type=OpenApiTypes.BOOL,
             location=OpenApiParameter.QUERY,
-            description="Enable fuzzy matching (default: false)",
+            description="Enable fuzzy matching using trigram similarity (default: false)",
             required=False,
+            examples=[
+                OpenApiExample(
+                    "Enable fuzzy",
+                    value=True,
+                    description="Use fuzzy matching for typos and similar terms",
+                )
+            ],
         ),
         OpenApiParameter(
             name="threshold",
             type=OpenApiTypes.FLOAT,
             location=OpenApiParameter.QUERY,
-            description="Similarity threshold for fuzzy search (default: 0.2)",
+            description="Similarity threshold for fuzzy search, range 0.0-1.0 (default: 0.2)",
+            required=False,
+            examples=[
+                OpenApiExample(
+                    "Strict matching",
+                    value=0.4,
+                    description="Higher threshold for more precise matches",
+                ),
+                OpenApiExample(
+                    "Loose matching",
+                    value=0.1,
+                    description="Lower threshold for broader matches",
+                ),
+            ],
+        ),
+        OpenApiParameter(
+            name="use_fts",
+            type=OpenApiTypes.BOOL,
+            location=OpenApiParameter.QUERY,
+            description="Enable full-text search using search_vector field (default: false)",
+            required=False,
+            examples=[
+                OpenApiExample(
+                    "Full-text search",
+                    value=True,
+                    description="Use PostgreSQL full-text search capabilities",
+                )
+            ],
+        ),
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Page number for pagination (default: 1)",
             required=False,
         ),
     ],
-    responses={200: ICD11TermListSerializer(many=True)},
+    responses={
+        200: OpenApiResponse(
+            description="Paginated search results",
+            response={
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "description": "Total number of matching terms",
+                    },
+                    "next": {
+                        "type": "string",
+                        "nullable": True,
+                        "description": "URL for next page",
+                    },
+                    "previous": {
+                        "type": "string",
+                        "nullable": True,
+                        "description": "URL for previous page",
+                    },
+                    "results": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "foundation_uri": {"type": "string"},
+                                "code": {"type": "string", "nullable": True},
+                                "title": {"type": "string"},
+                                "browser_url": {"type": "string"},
+                                "class_kind": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+        ),
+        400: OpenApiResponse(
+            description="Bad request - invalid parameters",
+            examples=[
+                OpenApiExample(
+                    "Invalid threshold",
+                    value={"error": "Threshold must be between 0.0 and 1.0"},
+                )
+            ],
+        ),
+        500: OpenApiResponse(
+            description="Internal server error",
+        ),
+    },
     tags=["ICD-11"],
+    operation_id="icd11_advanced_search",
 )
 @api_view(["GET"])
 def icd11_advanced_search(request):
