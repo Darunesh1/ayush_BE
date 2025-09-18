@@ -35,38 +35,133 @@ from .services.mapping_service import NamasteToICDMappingService
 
 @extend_schema(
     summary="Ayurveda Fuzzy Search",
-    description="Perform fuzzy search on Ayurveda terms using PostgreSQL pg_trgm extension",
+    description="Perform fuzzy search on Ayurveda terms using PostgreSQL pg_trgm extension with multilingual support",
     parameters=[
         OpenApiParameter(
             name="q",
             type=OpenApiTypes.STR,
             location=OpenApiParameter.QUERY,
-            description="Search term for fuzzy matching",
+            description="Search term for fuzzy matching across English, Hindi, and diacritical names",
+            required=False,
+            examples=[
+                OpenApiExample("English term", value="fever"),
+                OpenApiExample("Hindi term", value="बुखार"),
+                OpenApiExample("Code search", value="A001"),
+                OpenApiExample("Diacritical term", value="jvara"),
+                OpenApiExample("Sanskrit term", value="pittajvara"),
+            ],
+        ),
+        OpenApiParameter(
+            name="threshold",
+            type=OpenApiTypes.FLOAT,
+            location=OpenApiParameter.QUERY,
+            description="Similarity threshold for fuzzy matching, range 0.0-1.0 (default: 0.1)",
+            required=False,
+            examples=[
+                OpenApiExample("Strict matching", value=0.3),
+                OpenApiExample("Loose matching", value=0.05),
+            ],
+        ),
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Page number for pagination (default: 1)",
             required=False,
         ),
     ],
-    responses={200: AyurvedhaListSerializer(many=True)},
+    responses={
+        200: OpenApiResponse(
+            description="Paginated fuzzy search results with weighted scoring",
+            response={
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "description": "Total number of matching Ayurveda terms",
+                    },
+                    "next": {
+                        "type": "string",
+                        "nullable": True,
+                        "description": "URL for next page",
+                    },
+                    "previous": {
+                        "type": "string",
+                        "nullable": True,
+                        "description": "URL for previous page",
+                    },
+                    "results": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "integer"},
+                                "code": {"type": "string"},
+                                "english_name": {"type": "string", "nullable": True},
+                                "hindi_name": {"type": "string", "nullable": True},
+                                "diacritical_name": {
+                                    "type": "string",
+                                    "nullable": True,
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        ),
+        400: OpenApiResponse(
+            description="Bad request - invalid parameters",
+            examples=[
+                OpenApiExample(
+                    "Invalid threshold",
+                    value={"error": "Threshold must be between 0.0 and 1.0"},
+                )
+            ],
+        ),
+        500: OpenApiResponse(
+            description="Internal server error",
+        ),
+    },
     tags=["Ayurveda"],
+    operation_id="ayurveda_fuzzy_search",
 )
 @api_view(["GET"])
 def ayurvedha_fuzzy_search(request):
+    """
+    Perform fuzzy search on Ayurveda medicine terms with multilingual support.
+
+    Features:
+    - Searches across code, English name, Hindi name, and diacritical name
+    - Uses PostgreSQL trigram similarity for fuzzy matching
+    - Weighted scoring with English names prioritized
+    - Combines fuzzy and exact matching for comprehensive results
+    - Configurable similarity threshold
+    - Support for Sanskrit/Hindi terminology and transliteration
+    """
     search_term = request.query_params.get("q", "").strip()
+    similarity_threshold = float(request.query_params.get("threshold", "0.1"))
+
+    # Validate threshold parameter
+    if not (0.0 <= similarity_threshold <= 1.0):
+        return Response({"error": "Threshold must be between 0.0 and 1.0"}, status=400)
 
     if not search_term:
         queryset = Ayurvedha.objects.all().order_by("code")
     else:
+        # Fuzzy search using trigram similarity
         fuzzy_qs = Ayurvedha.objects.annotate(
             similarity_code=TrigramSimilarity("code", search_term),
             similarity_english=TrigramSimilarity("english_name", search_term),
             similarity_hindi=TrigramSimilarity("hindi_name", search_term),
             similarity_diacritical=TrigramSimilarity("diacritical_name", search_term),
         ).filter(
-            Q(similarity_code__gt=0.1)
-            | Q(similarity_english__gt=0.1)
-            | Q(similarity_hindi__gt=0.1)
-            | Q(similarity_diacritical__gt=0.1)
+            Q(similarity_code__gt=similarity_threshold)
+            | Q(similarity_english__gt=similarity_threshold)
+            | Q(similarity_hindi__gt=similarity_threshold)
+            | Q(similarity_diacritical__gt=similarity_threshold)
         )
 
+        # Exact matches (case-insensitive)
         exact_qs = Ayurvedha.objects.filter(
             Q(code__iexact=search_term)
             | Q(english_name__iexact=search_term)
@@ -74,29 +169,29 @@ def ayurvedha_fuzzy_search(request):
             | Q(diacritical_name__iexact=search_term)
         )
 
+        # Combine and deduplicate results
         queryset = (fuzzy_qs | exact_qs).distinct()
 
-        # queryset = queryset.annotate(
-        #     max_similarity=(
-        #         TrigramSimilarity("code", search_term)
-        #         + TrigramSimilarity("english_name", search_term)
-        #         + TrigramSimilarity("hindi_name", search_term)
-        #         + TrigramSimilarity("diacritical_name", search_term)
-        #     )
-        # ).order_by("-max_similarity", "code")
+        # Apply weighted scoring for relevance ranking
         queryset = queryset.annotate(
             weighted_score=(
-                TrigramSimilarity("english_name", search_term) * 2.5
-                + TrigramSimilarity("code", search_term) * 1.0
-                + TrigramSimilarity("hindi_name", search_term) * 0.8
-                + TrigramSimilarity("diacritical_name", search_term) * 0.8
+                TrigramSimilarity("english_name", search_term)
+                * 2.5  # Prioritize English
+                + TrigramSimilarity("code", search_term)
+                * 1.0  # Standard weight for codes
+                + TrigramSimilarity("hindi_name", search_term)
+                * 0.8  # Hindi language support
+                + TrigramSimilarity("diacritical_name", search_term)
+                * 0.8  # Diacritical/Sanskrit terms
             )
         ).order_by("-weighted_score", "code")
 
+    # Pagination
     paginator = PageNumberPagination()
     paginator.page_size = 20
     page = paginator.paginate_queryset(queryset, request)
 
+    # Serialize results
     serializer = AyurvedhaListSerializer(page, many=True)
     return paginator.get_paginated_response(serializer.data)
 
