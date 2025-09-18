@@ -1,6 +1,8 @@
 from django.contrib.postgres.search import SearchQuery, SearchRank, TrigramSimilarity
 from django.core.paginator import Paginator
+from django.db import models
 from django.db.models import Case, Count, F, FloatField, Q, Value, When
+from django.db.models.functions import Cast
 from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
 
@@ -15,6 +17,7 @@ from .serializers import (
     AyurvedhaListSerializer,
     AyurvedhaSerializer,
     ICD11TermListSerializer,
+    ICD11TermSearchSerializer,
     RecentMappingSerializer,
     SiddhaListSerializer,
     TermMappingDetailSerializer,
@@ -325,58 +328,121 @@ def unani_fuzzy_search(request):
 )
 @api_view(["GET"])
 def icd11_advanced_search(request):
+    """
+    Advanced search for ICD-11 terms with fuzzy search and full-text capabilities.
+
+    Query Parameters:
+    - q: Search term
+    - fuzzy: Use fuzzy search (true/false)
+    - threshold: Similarity threshold for fuzzy search (default: 0.2)
+    - use_fts: Use full-text search with search_vector (true/false)
+    """
     search_term = request.query_params.get("q", "").strip()
     use_fuzzy = request.query_params.get("fuzzy", "").lower() in ["true", "1"]
+    use_fts = request.query_params.get("use_fts", "").lower() in ["true", "1"]
     similarity_threshold = float(request.query_params.get("threshold", "0.2"))
 
     if not search_term:
         queryset = ICD11Term.objects.all().order_by("code")
     else:
-        if use_fuzzy:
-            # Use only trigram similarity (more reliable)
+        if use_fts and hasattr(ICD11Term, "search_vector"):
+            # Use full-text search with search_vector
+            search_query = SearchQuery(search_term)
+            queryset = (
+                ICD11Term.objects.filter(search_vector=search_query)
+                .annotate(rank=SearchRank(F("search_vector"), search_query))
+                .order_by("-rank", "code")
+            )
+        elif use_fuzzy:
+            # Enhanced fuzzy search with JSON field support
             queryset = (
                 ICD11Term.objects.annotate(
                     code_sim=TrigramSimilarity("code", search_term),
                     title_sim=TrigramSimilarity("title", search_term),
-                    synonym_sim=TrigramSimilarity("synonyms__label", search_term),
+                    definition_sim=TrigramSimilarity("definition", search_term),
+                    # JSON field similarity - convert JSON array to text for similarity
+                    index_terms_sim=Case(
+                        When(
+                            index_terms__isnull=False,
+                            then=TrigramSimilarity(
+                                Cast("index_terms", models.TextField()),
+                                search_term,
+                            ),
+                        ),
+                        default=Value(0.0),
+                        output_field=FloatField(),
+                    ),
+                    inclusions_sim=Case(
+                        When(
+                            inclusions__isnull=False,
+                            then=TrigramSimilarity(
+                                Cast("inclusions", models.TextField()),
+                                search_term,
+                            ),
+                        ),
+                        default=Value(0.0),
+                        output_field=FloatField(),
+                    ),
                 )
                 .filter(
                     Q(code_sim__gte=similarity_threshold)
                     | Q(title_sim__gte=similarity_threshold)
-                    | Q(synonym_sim__gte=similarity_threshold)
+                    | Q(definition_sim__gte=similarity_threshold)
+                    | Q(index_terms_sim__gte=similarity_threshold)
+                    | Q(inclusions_sim__gte=similarity_threshold)
                 )
                 .distinct()
                 .annotate(
-                    total_similarity=F("code_sim") + F("title_sim") + F("synonym_sim")
+                    total_similarity=(
+                        F("code_sim")
+                        + F("title_sim")
+                        + F("definition_sim")
+                        + F("index_terms_sim")
+                        + F("inclusions_sim")
+                    )
                 )
                 .order_by("-total_similarity", "code")
             )
         else:
-            # Use traditional icontains search with trigram similarity
-            term_filter = Q(code__icontains=search_term) | Q(
-                title__icontains=search_term
+            # Traditional icontains search with JSON field support
+            basic_filter = (
+                Q(code__icontains=search_term)
+                | Q(title__icontains=search_term)
+                | Q(definition__icontains=search_term)
             )
 
-            # Search synonym labels via reverse relation
-            synonym_filter = Q(synonyms__label__icontains=search_term)
+            # JSON field searches using containment
+            json_filter = (
+                Q(index_terms__icontains=search_term)
+                | Q(inclusions__icontains=search_term)
+                | Q(exclusions__icontains=search_term)
+            )
 
             queryset = (
-                ICD11Term.objects.filter(term_filter | synonym_filter)
+                ICD11Term.objects.filter(basic_filter | json_filter)
                 .distinct()
                 .annotate(
                     weighted_score=Case(
                         # Exact matches get highest priority
                         When(title__iexact=search_term, then=Value(10.0)),
                         When(code__iexact=search_term, then=Value(9.0)),
-                        When(synonyms__label__iexact=search_term, then=Value(8.5)),
+                        When(definition__iexact=search_term, then=Value(8.8)),
+                        # JSON field exact matches
+                        When(
+                            index_terms__icontains=f'"{search_term}"', then=Value(8.5)
+                        ),
+                        When(inclusions__icontains=f'"{search_term}"', then=Value(8.2)),
                         # Starts with gets medium priority
                         When(title__istartswith=search_term, then=Value(8.0)),
                         When(code__istartswith=search_term, then=Value(7.0)),
-                        When(synonyms__label__istartswith=search_term, then=Value(6.5)),
+                        When(definition__istartswith=search_term, then=Value(6.8)),
                         # Contains gets lower priority
                         When(title__icontains=search_term, then=Value(6.0)),
                         When(code__icontains=search_term, then=Value(5.0)),
-                        When(synonyms__label__icontains=search_term, then=Value(4.5)),
+                        When(definition__icontains=search_term, then=Value(4.8)),
+                        When(index_terms__icontains=search_term, then=Value(4.5)),
+                        When(inclusions__icontains=search_term, then=Value(4.2)),
+                        When(exclusions__icontains=search_term, then=Value(4.0)),
                         default=Value(1.0),
                         output_field=FloatField(),
                     )
@@ -388,6 +454,8 @@ def icd11_advanced_search(request):
     paginator = PageNumberPagination()
     paginator.page_size = 20
     page = paginator.paginate_queryset(queryset, request)
+
+    # Use List serializer for better performance
     serializer = ICD11TermListSerializer(page, many=True)
     return paginator.get_paginated_response(serializer.data)
 
