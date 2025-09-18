@@ -33,12 +33,12 @@ urlpatterns = [
     path("terminologies/", include("terminologies.urls")),
     # API Documentation endpoints
     path("schema/", SpectacularAPIView.as_view(), name="schema"),
+    path("redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
     path(
-        "docs/",
+        "swagger/",
         SpectacularSwaggerView.as_view(url_name="schema"),
         name="swagger-ui",
     ),
-    path("redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
 ]
 
 
