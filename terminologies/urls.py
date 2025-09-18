@@ -16,6 +16,7 @@ urlpatterns = [
     path("siddha/autocomplete/", views.siddha_autocomplete, name="siddha_autocomplete"),
     path("unani/search/", views.unani_fuzzy_search, name="unani_fuzzy_search"),
     path("unani/autocomplete/", views.unani_autocomplete, name="unani_autocomplete"),
+    path("unani/csv/upload/", views.unani_csv_upload, name="unani_csv_upload"),
     path("icd11/search/", views.icd11_advanced_search, name="icd11_advanced_search"),
     path("icd11/autocomplete/", views.icd11_autocomplete, name="icd11_autocomplete"),
     # Mapping

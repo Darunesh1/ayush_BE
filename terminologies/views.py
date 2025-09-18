@@ -1061,6 +1061,250 @@ def unani_autocomplete(request):
 
 
 @extend_schema(
+    summary="Upload Unani CSV",
+    description="Upload CSV file to populate Unani terms database. Updates existing records by code or creates new ones.",
+    request={
+        "multipart/form-data": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "CSV file with Unani terms (columns: code, english_name, description, arabic_name, romanized_name, reference)",
+                },
+                "update_search_vector": {
+                    "type": "boolean",
+                    "description": "Whether to update search vectors after import",
+                    "default": True,
+                },
+            },
+            "required": ["file"],
+        }
+    },
+    responses={
+        200: OpenApiResponse(
+            description="CSV processed successfully",
+            response={
+                "type": "object",
+                "properties": {
+                    "created": {
+                        "type": "integer",
+                        "description": "Number of new records created",
+                    },
+                    "updated": {
+                        "type": "integer",
+                        "description": "Number of existing records updated",
+                    },
+                    "skipped": {
+                        "type": "integer",
+                        "description": "Number of rows skipped due to errors",
+                    },
+                    "total_processed": {
+                        "type": "integer",
+                        "description": "Total rows processed",
+                    },
+                    "errors": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of error messages for failed rows",
+                    },
+                    "summary": {"type": "string", "description": "Processing summary"},
+                },
+            },
+        ),
+        400: OpenApiResponse(
+            description="Bad request - invalid file or format",
+            examples=[
+                OpenApiExample(
+                    "No file provided", value={"error": "CSV file not provided"}
+                ),
+                OpenApiExample(
+                    "Invalid CSV format",
+                    value={"error": "Invalid CSV format: missing required headers"},
+                ),
+            ],
+        ),
+        413: OpenApiResponse(description="File too large"),
+    },
+    tags=["Unani"],
+    operation_id="unani_csv_upload",
+)
+@api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
+def unani_csv_upload(request):
+    """
+    Upload CSV file to populate Unani terms database.
+
+    CSV Format:
+    - Required columns: code
+    - Optional columns: english_name, description, arabic_name, romanized_name, reference
+    - First row should contain headers
+    - Encoding: UTF-8
+
+    Processing Logic:
+    - If code exists: Update the existing record
+    - If code doesn't exist: Create new record
+    - Ensures no duplicate codes in database
+    """
+
+    # Validate file upload
+    file = request.FILES.get("file")
+    if not file:
+        return Response(
+            {"error": "CSV file not provided"}, status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Check file size (limit to 10MB)
+    if file.size > 10 * 1024 * 1024:
+        return Response(
+            {"error": "File size too large. Maximum 10MB allowed"},
+            status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
+
+    # Check file extension
+    if not file.name.endswith(".csv"):
+        return Response(
+            {"error": "Invalid file format. Only CSV files allowed"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    update_search_vector = (
+        request.data.get("update_search_vector", "true").lower() == "true"
+    )
+
+    try:
+        # Read CSV file
+        csv_file = TextIOWrapper(file.file, encoding="utf-8")
+        reader = csv.DictReader(csv_file)
+
+        # Validate required headers
+        required_headers = ["code"]
+
+        if not all(header in reader.fieldnames for header in required_headers):
+            return Response(
+                {"error": f"Missing required headers: {required_headers}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    except UnicodeDecodeError:
+        return Response(
+            {"error": "Invalid file encoding. Please use UTF-8 encoding"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Failed to read CSV file: {str(e)}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Process CSV data
+    created_count = 0
+    updated_count = 0
+    skipped_count = 0
+    total_processed = 0
+    errors = []
+
+    with transaction.atomic():
+        for row_num, row in enumerate(
+            reader, start=2
+        ):  # Start at 2 because of header row
+            total_processed += 1
+
+            # Validate required fields
+            code = row.get("code", "").strip()
+            if not code:
+                errors.append(f"Row {row_num}: Missing or empty code field")
+                skipped_count += 1
+                continue
+
+            # Validate code format (basic validation)
+            if len(code) > 50:
+                errors.append(
+                    f'Row {row_num}: Code "{code}" exceeds maximum length of 50 characters'
+                )
+                skipped_count += 1
+                continue
+
+            try:
+                # Check if record exists
+                unani_obj, created = Unani.objects.get_or_create(
+                    code=code,
+                    defaults={
+                        "english_name": row.get("english_name", "").strip() or None,
+                        "description": row.get("description", "").strip() or None,
+                        "arabic_name": row.get("arabic_name", "").strip() or None,
+                        "romanized_name": row.get("romanized_name", "").strip() or None,
+                        "reference": row.get("reference", "").strip() or None,
+                    },
+                )
+
+                if created:
+                    created_count += 1
+                else:
+                    # Update existing record
+                    updated_fields = []
+
+                    new_english_name = row.get("english_name", "").strip() or None
+                    if new_english_name and new_english_name != unani_obj.english_name:
+                        unani_obj.english_name = new_english_name
+                        updated_fields.append("english_name")
+
+                    new_description = row.get("description", "").strip() or None
+                    if new_description and new_description != unani_obj.description:
+                        unani_obj.description = new_description
+                        updated_fields.append("description")
+
+                    new_arabic_name = row.get("arabic_name", "").strip() or None
+                    if new_arabic_name and new_arabic_name != unani_obj.arabic_name:
+                        unani_obj.arabic_name = new_arabic_name
+                        updated_fields.append("arabic_name")
+
+                    new_romanized_name = row.get("romanized_name", "").strip() or None
+                    if (
+                        new_romanized_name
+                        and new_romanized_name != unani_obj.romanized_name
+                    ):
+                        unani_obj.romanized_name = new_romanized_name
+                        updated_fields.append("romanized_name")
+
+                    new_reference = row.get("reference", "").strip() or None
+                    if new_reference and new_reference != unani_obj.reference:
+                        unani_obj.reference = new_reference
+                        updated_fields.append("reference")
+
+                    if updated_fields:
+                        unani_obj.save()
+                        updated_count += 1
+
+            except Exception as e:
+                errors.append(
+                    f'Row {row_num}: Failed to process code "{code}" - {str(e)}'
+                )
+                skipped_count += 1
+                continue
+
+    # Prepare response
+    result = {
+        "created": created_count,
+        "updated": updated_count,
+        "skipped": skipped_count,
+        "total_processed": total_processed,
+        "errors": errors,
+        "summary": f"Processed {total_processed} rows: {created_count} created, {updated_count} updated, {skipped_count} skipped",
+    }
+
+    # Determine response status
+    if errors and (created_count == 0 and updated_count == 0):
+        status_code = status.HTTP_400_BAD_REQUEST
+    elif errors:
+        status_code = status.HTTP_207_MULTI_STATUS  # Partial success
+    else:
+        status_code = status.HTTP_200_OK
+
+    return Response(result, status=status_code)
+
+
+@extend_schema(
     summary="ICD-11 Advanced Search",
     description="Advanced search through ICD-11 terms including Traditional Medicine Module 2 with fuzzy matching, full-text search, and JSON field support",
     parameters=[
