@@ -194,55 +194,158 @@ def get_autocomplete_queryset(search_term, limit):
 
 @extend_schema(
     summary="Siddha Fuzzy Search",
-    description="Perform fuzzy search on Siddha terms using PostgreSQL pg_trgm extension",
+    description="Perform fuzzy search on Siddha terms using PostgreSQL pg_trgm extension with multilingual support",
     parameters=[
         OpenApiParameter(
             name="q",
             type=OpenApiTypes.STR,
             location=OpenApiParameter.QUERY,
-            description="Search term for fuzzy matching",
+            description="Search term for fuzzy matching across English, Tamil, and romanized names",
+            required=False,
+            examples=[
+                OpenApiExample("English term", value="fever"),
+                OpenApiExample("Tamil term", value="காய்ச்சல்"),
+                OpenApiExample("Code search", value="S001"),
+                OpenApiExample("Romanized term", value="kaaychchal"),
+            ],
+        ),
+        OpenApiParameter(
+            name="threshold",
+            type=OpenApiTypes.FLOAT,
+            location=OpenApiParameter.QUERY,
+            description="Similarity threshold for fuzzy matching, range 0.0-1.0 (default: 0.1)",
+            required=False,
+            examples=[
+                OpenApiExample("Strict matching", value=0.3),
+                OpenApiExample("Loose matching", value=0.05),
+            ],
+        ),
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Page number for pagination (default: 1)",
             required=False,
         ),
     ],
-    responses={200: SiddhaListSerializer(many=True)},
+    responses={
+        200: OpenApiResponse(
+            description="Paginated fuzzy search results with weighted scoring",
+            response={
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "description": "Total number of matching Siddha terms",
+                    },
+                    "next": {
+                        "type": "string",
+                        "nullable": True,
+                        "description": "URL for next page",
+                    },
+                    "previous": {
+                        "type": "string",
+                        "nullable": True,
+                        "description": "URL for previous page",
+                    },
+                    "results": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "integer"},
+                                "code": {"type": "string"},
+                                "english_name": {"type": "string", "nullable": True},
+                                "tamil_name": {"type": "string", "nullable": True},
+                                "romanized_name": {"type": "string", "nullable": True},
+                            },
+                        },
+                    },
+                },
+            },
+        ),
+        400: OpenApiResponse(
+            description="Bad request - invalid parameters",
+            examples=[
+                OpenApiExample(
+                    "Invalid threshold",
+                    value={"error": "Threshold must be between 0.0 and 1.0"},
+                )
+            ],
+        ),
+        500: OpenApiResponse(
+            description="Internal server error",
+        ),
+    },
     tags=["Siddha"],
+    operation_id="siddha_fuzzy_search",
 )
 @api_view(["GET"])
 def siddha_fuzzy_search(request):
+    """
+    Perform fuzzy search on Siddha medicine terms with multilingual support.
+
+    Features:
+    - Searches across code, English name, Tamil name, and romanized name
+    - Uses PostgreSQL trigram similarity for fuzzy matching
+    - Weighted scoring with English names prioritized
+    - Combines fuzzy and exact matching for comprehensive results
+    - Configurable similarity threshold
+    """
     search_term = request.query_params.get("q", "").strip()
+    similarity_threshold = float(request.query_params.get("threshold", "0.1"))
+
+    # Validate threshold parameter
+    if not (0.0 <= similarity_threshold <= 1.0):
+        return Response({"error": "Threshold must be between 0.0 and 1.0"}, status=400)
+
     if not search_term:
         queryset = Siddha.objects.all().order_by("code")
     else:
+        # Fuzzy search using trigram similarity
         fuzzy_qs = Siddha.objects.annotate(
             similarity_code=TrigramSimilarity("code", search_term),
             similarity_english=TrigramSimilarity("english_name", search_term),
             similarity_tamil=TrigramSimilarity("tamil_name", search_term),
             similarity_romanized=TrigramSimilarity("romanized_name", search_term),
         ).filter(
-            Q(similarity_code__gt=0.1)
-            | Q(similarity_english__gt=0.1)
-            | Q(similarity_tamil__gt=0.1)
-            | Q(similarity_romanized__gt=0.1)
+            Q(similarity_code__gt=similarity_threshold)
+            | Q(similarity_english__gt=similarity_threshold)
+            | Q(similarity_tamil__gt=similarity_threshold)
+            | Q(similarity_romanized__gt=similarity_threshold)
         )
+
+        # Exact matches (case-insensitive)
         exact_qs = Siddha.objects.filter(
             Q(code__iexact=search_term)
             | Q(english_name__iexact=search_term)
             | Q(tamil_name__iexact=search_term)
             | Q(romanized_name__iexact=search_term)
         )
+
+        # Combine and deduplicate results
         queryset = (fuzzy_qs | exact_qs).distinct()
+
+        # Apply weighted scoring for relevance ranking
         queryset = queryset.annotate(
             weighted_score=(
-                TrigramSimilarity("english_name", search_term) * 2.5
-                + TrigramSimilarity("code", search_term) * 1.0
-                + TrigramSimilarity("tamil_name", search_term) * 0.8
-                + TrigramSimilarity("romanized_name", search_term) * 0.8
+                TrigramSimilarity("english_name", search_term)
+                * 2.5  # Prioritize English
+                + TrigramSimilarity("code", search_term)
+                * 1.0  # Standard weight for codes
+                + TrigramSimilarity("tamil_name", search_term)
+                * 0.8  # Tamil language support
+                + TrigramSimilarity("romanized_name", search_term)
+                * 0.8  # Romanized Tamil
             )
         ).order_by("-weighted_score", "code")
 
+    # Pagination
     paginator = PageNumberPagination()
     paginator.page_size = 20
     page = paginator.paginate_queryset(queryset, request)
+
+    # Serialize results
     serializer = SiddhaListSerializer(page, many=True)
     return paginator.get_paginated_response(serializer.data)
 
