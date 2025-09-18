@@ -3,6 +3,33 @@ from rest_framework import serializers
 from .models import Ayurvedha, ICD11Term, Siddha, TermMapping, Unani
 
 
+class ICD11TermSearchSerializer(serializers.ModelSerializer):
+    """
+    Optimized serializer for fuzzy search results using pg_trgm.
+    Includes computed fields for better search UX.
+    """
+
+    display_text = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ICD11Term
+        fields = [
+            "foundation_uri",
+            "code",
+            "title",
+            "display_text",
+            "browser_url",
+            "class_kind",
+            "definition",
+        ]
+
+    def get_display_text(self, obj):
+        """Format display text for auto-complete widgets"""
+        if obj.code:
+            return f"{obj.code} - {obj.title}"
+        return obj.title
+
+
 class ICD11TermDetailSerializer(serializers.ModelSerializer):
     """
     Complete serializer for ICD-11 terms with all available data.
