@@ -3,6 +3,39 @@ from rest_framework import serializers
 from .models import Ayurvedha, ICD11Term, Siddha, TermMapping, Unani
 
 
+class ICD11TermDetailSerializer(serializers.ModelSerializer):
+    """
+    Complete serializer for ICD-11 terms with all available data.
+    Used for detailed views and complete data access.
+    """
+
+    class Meta:
+        model = ICD11Term
+        fields = [
+            "foundation_uri",
+            "code",
+            "title",
+            "definition",
+            "long_definition",
+            "index_terms",
+            "parent",
+            "inclusions",
+            "exclusions",
+            "postcoordination_scales",
+            "related_perinatal_entities",
+            "browser_url",
+            "source",
+            "class_kind",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "created_at",
+            "updated_at",
+            "search_vector",  # Excluded from fields but kept as read-only
+        ]
+
+
 class ICD11TermListSerializer(serializers.ModelSerializer):
     """
     Lightweight serializer for listing ICD-11 terms.
