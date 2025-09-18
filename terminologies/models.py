@@ -9,8 +9,7 @@ class BaseNamasteModel(models.Model):
     english_name = models.CharField(
         max_length=255, null=True, blank=True, db_index=True
     )
-
-    # Optional: Pre-computed search vector for full-text search
+    # Pre-computed search vector for full-text search
     search_vector = SearchVectorField(null=True, blank=True)
 
     class Meta:
@@ -18,6 +17,17 @@ class BaseNamasteModel(models.Model):
         indexes = [
             # Composite index for common search patterns
             models.Index(fields=["code", "english_name"]),
+            # Trigram indexes for fuzzy search on base fields
+            GinIndex(
+                fields=["code"], name="base_code_trgm", opclasses=["gin_trgm_ops"]
+            ),
+            GinIndex(
+                fields=["english_name"],
+                name="base_english_name_trgm",
+                opclasses=["gin_trgm_ops"],
+            ),
+            # Full-text search vector index
+            GinIndex(fields=["search_vector"], name="base_search_vector_gin"),
         ]
 
     def __str__(self):
@@ -39,8 +49,27 @@ class Ayurvedha(BaseNamasteModel):
             models.Index(fields=["hindi_name"]),
             models.Index(fields=["diacritical_name"]),
             models.Index(fields=["english_name", "hindi_name"]),
-            # GIN index for search vector
+            # GIN index for full-text search vector
             GinIndex(fields=["search_vector"], name="ayurveda_search_gin"),
+            # Trigram indexes for fuzzy search
+            GinIndex(
+                fields=["english_name"],
+                name="ayurveda_english_name_trgm",
+                opclasses=["gin_trgm_ops"],
+            ),
+            GinIndex(
+                fields=["hindi_name"],
+                name="ayurveda_hindi_name_trgm",
+                opclasses=["gin_trgm_ops"],
+            ),
+            GinIndex(
+                fields=["diacritical_name"],
+                name="ayurveda_diacritical_name_trgm",
+                opclasses=["gin_trgm_ops"],
+            ),
+            GinIndex(
+                fields=["code"], name="ayurveda_code_trgm", opclasses=["gin_trgm_ops"]
+            ),
         ]
 
 
@@ -56,10 +85,31 @@ class Siddha(BaseNamasteModel):
         verbose_name = "Siddha Term"
         verbose_name_plural = "Siddha Terms"
         indexes = [
+            # Standard B-tree indexes
             models.Index(fields=["tamil_name"]),
             models.Index(fields=["romanized_name"]),
             models.Index(fields=["english_name", "tamil_name"]),
+            # GIN index for full-text search vector
             GinIndex(fields=["search_vector"], name="siddha_search_gin"),
+            # Trigram indexes for fuzzy search
+            GinIndex(
+                fields=["english_name"],
+                name="siddha_english_name_trgm",
+                opclasses=["gin_trgm_ops"],
+            ),
+            GinIndex(
+                fields=["tamil_name"],
+                name="siddha_tamil_name_trgm",
+                opclasses=["gin_trgm_ops"],
+            ),
+            GinIndex(
+                fields=["romanized_name"],
+                name="siddha_romanized_name_trgm",
+                opclasses=["gin_trgm_ops"],
+            ),
+            GinIndex(
+                fields=["code"], name="siddha_code_trgm", opclasses=["gin_trgm_ops"]
+            ),
         ]
 
 
@@ -75,10 +125,31 @@ class Unani(BaseNamasteModel):
         verbose_name = "Unani Term"
         verbose_name_plural = "Unani Terms"
         indexes = [
+            # Standard B-tree indexes
             models.Index(fields=["arabic_name"]),
             models.Index(fields=["romanized_name"]),
             models.Index(fields=["english_name", "arabic_name"]),
+            # GIN index for full-text search vector
             GinIndex(fields=["search_vector"], name="unani_search_gin"),
+            # Trigram indexes for fuzzy search
+            GinIndex(
+                fields=["english_name"],
+                name="unani_english_name_trgm",
+                opclasses=["gin_trgm_ops"],
+            ),
+            GinIndex(
+                fields=["arabic_name"],
+                name="unani_arabic_name_trgm",
+                opclasses=["gin_trgm_ops"],
+            ),
+            GinIndex(
+                fields=["romanized_name"],
+                name="unani_romanized_name_trgm",
+                opclasses=["gin_trgm_ops"],
+            ),
+            GinIndex(
+                fields=["code"], name="unani_code_trgm", opclasses=["gin_trgm_ops"]
+            ),
         ]
 
 
@@ -95,8 +166,8 @@ class ICD11Term(models.Model):
     # JSON fields for all list data
     index_terms = models.JSONField(default=list, blank=True)
     parent = models.JSONField(default=list, blank=True)
-    inclusions = models.JSONField(default=list, blank=True)  # Store here
-    exclusions = models.JSONField(default=list, blank=True)  # Store here
+    inclusions = models.JSONField(default=list, blank=True)
+    exclusions = models.JSONField(default=list, blank=True)
     postcoordination_scales = models.JSONField(default=list, blank=True)
     related_perinatal_entities = models.JSONField(default=list, blank=True)
 
@@ -111,6 +182,37 @@ class ICD11Term(models.Model):
     # Audit fields
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "icd11_terms"
+        verbose_name = "ICD-11 Term"
+        verbose_name_plural = "ICD-11 Terms"
+        indexes = [
+            # Standard B-tree indexes for exact lookups
+            models.Index(fields=["code"]),
+            models.Index(fields=["title"]),
+            models.Index(fields=["foundation_uri"]),
+            models.Index(fields=["class_kind"]),
+            models.Index(fields=["created_at"]),
+            # Composite indexes for common search patterns
+            models.Index(fields=["code", "title"]),
+            models.Index(fields=["class_kind", "created_at"]),
+            # GIN indexes for full-text search and JSON fields
+            GinIndex(fields=["search_vector"], name="icd11_search_gin"),
+            GinIndex(fields=["index_terms"], name="icd11_index_terms_gin"),
+            GinIndex(fields=["inclusions"], name="icd11_inclusions_gin"),
+            GinIndex(fields=["exclusions"], name="icd11_exclusions_gin"),
+            # Trigram indexes for fuzzy search
+            GinIndex(
+                fields=["title"], name="icd11_title_trgm", opclasses=["gin_trgm_ops"]
+            ),
+            GinIndex(
+                fields=["code"], name="icd11_code_trgm", opclasses=["gin_trgm_ops"]
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.code} - {self.title}" if self.code else self.title
 
 
 class TermMapping(models.Model):
