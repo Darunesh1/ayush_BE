@@ -1075,6 +1075,102 @@ def icd11_advanced_search(request):
     return paginator.get_paginated_response(serializer.data)
 
 
+@extend_schema(
+    summary="ICD-11 Autocomplete",
+    description="Fast autocomplete for ICD-11 terms - returns only matching titles for optimal performance",
+    parameters=[
+        OpenApiParameter(
+            name="q",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Search term for autocomplete (searches across title, code, and definition)",
+            required=True,
+            examples=[
+                OpenApiExample(
+                    "Partial term", value="diab", description="Matches 'diabetes'"
+                ),
+                OpenApiExample(
+                    "Code search", value="E10", description="Matches ICD codes"
+                ),
+                OpenApiExample(
+                    "Medical term",
+                    value="blood",
+                    description="Matches blood-related conditions",
+                ),
+            ],
+        ),
+        OpenApiParameter(
+            name="limit",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Maximum results to return (default: 10, max: 20)",
+            required=False,
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(
+            description="List of matching title names only",
+            response={
+                "type": "array",
+                "items": {"type": "string"},
+                "example": [
+                    "diabetes mellitus",
+                    "diabetes type 1",
+                    "diabetic nephropathy",
+                ],
+            },
+        )
+    },
+    tags=["ICD-11"],
+    operation_id="icd11_autocomplete",
+)
+@api_view(["GET"])
+def icd11_autocomplete(request):
+    search_term = request.query_params.get("q", "").strip()
+    limit = min(int(request.query_params.get("limit", 10)), 20)
+
+    if not search_term or len(search_term) < 1:
+        return Response([])
+
+    # Use the same pattern as your working Ayurveda fuzzy search
+    fuzzy_qs = ICD11Term.objects.annotate(
+        similarity_code=TrigramSimilarity("code", search_term),
+        similarity_title=TrigramSimilarity("title", search_term),
+        similarity_definition=TrigramSimilarity("definition", search_term),
+    ).filter(
+        Q(similarity_code__gt=0.1)
+        | Q(similarity_title__gt=0.1)
+        | Q(similarity_definition__gt=0.1)
+    )
+
+    # Exact matches for better autocomplete experience
+    exact_qs = ICD11Term.objects.filter(
+        Q(code__icontains=search_term)
+        | Q(title__icontains=search_term)
+        | Q(definition__icontains=search_term)
+    )
+
+    # Combine queries and apply weighted scoring
+    queryset = (
+        (fuzzy_qs | exact_qs)
+        .distinct()
+        .annotate(
+            weighted_score=(
+                TrigramSimilarity("title", search_term) * 2.5  # Prioritize title
+                + TrigramSimilarity("code", search_term)
+                * 1.0  # Standard weight for codes
+                + TrigramSimilarity("definition", search_term)
+                * 0.8  # Definition support
+            )
+        )
+        .order_by("-weighted_score", "title")
+    )
+
+    # Extract only title
+    titles = list(queryset.values_list("title", flat=True)[:limit])
+    return Response(titles)
+
+
 @api_view(["GET"])
 def search_namaste_mappings(request):
     """Fuzzy search NAMASTE terms within a specific system and return mappings"""
