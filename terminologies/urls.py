@@ -12,6 +12,7 @@ urlpatterns = [
         name="ayurvedha_autocomplete",
     ),
     path("siddha/search/", views.siddha_fuzzy_search, name="siddha_fuzzy_search"),
+    path("siddha/autocomplete", views.siddha_autocomplete, name="siddha_autocomplete"),
     path("unani/search/", views.unani_fuzzy_search, name="unani_fuzzy_search"),
     path("icd11/search/", views.icd11_advanced_search, name="icd11_advanced_search"),
     # Mapping
