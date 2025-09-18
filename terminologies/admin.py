@@ -2,7 +2,6 @@ from django.contrib import admin
 
 from .models import (
     Ayurvedha,
-    ICD11Synonym,
     ICD11Term,
     Siddha,
     Unani,
@@ -27,13 +26,7 @@ class UnaniAdmin(admin.ModelAdmin):
     search_fields = ("code", "english_name", "arabic_name", "romanized_name")
 
 
-class ICD11SynonymInline(admin.TabularInline):
-    model = ICD11Synonym
-    extra = 1
-
-
 @admin.register(ICD11Term)
 class ICD11TermAdmin(admin.ModelAdmin):
     list_display = ("code", "title", "foundation_uri")
     search_fields = ("code", "title")
-    inlines = [ICD11SynonymInline]
