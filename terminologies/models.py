@@ -86,18 +86,25 @@ class ICD11Term(models.Model):
     foundation_uri = models.URLField(max_length=500, unique=True)
     code = models.CharField(max_length=50, null=True, blank=True, db_index=True)
     title = models.CharField(max_length=255, db_index=True)
+    definition = models.TextField(null=True, blank=True)
+    long_definition = models.TextField(null=True, blank=True)
 
-    # For fuzzy/full-text search
+    # Search vector - will be maintained by database trigger
     search_vector = SearchVectorField(null=True, blank=True)
 
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
     class Meta:
-        db_table = "icd11_terms"
-        verbose_name = "ICD-11 Term"
-        verbose_name_plural = "ICD-11 Terms"
+        db_table = "icd_terms"
+        verbose_name = "ICD Term"
+        verbose_name_plural = "ICD Terms"
         indexes = [
             models.Index(fields=["code"]),
             models.Index(fields=["title"]),
-            GinIndex(fields=["search_vector"], name="icd11_search_gin"),
+            models.Index(fields=["created_at"]),
+            GinIndex(fields=["search_vector"], name="icd_search_gin"),
         ]
 
     def __str__(self):
