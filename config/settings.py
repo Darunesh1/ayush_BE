@@ -46,6 +46,9 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "drf_spectacular",
+    "drf_spectacular_sidecar",
+    "django_filters",
     "corsheaders",
     "core",
     "terminologies",
@@ -136,13 +139,64 @@ DATABASES = {
 }
 
 REST_FRAMEWORK = {
+    # Add this line for drf-spectacular to work
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Keep your existing authentication classes
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],
+    # Keep your existing permission classes
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.AllowAny",  # change to IsAuthenticated later
     ],
+    # Add these useful settings for your medical API
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 50,  # Good for medical record lists
+    # Add filtering and search capabilities for NAMASTE codes
+    "DEFAULT_FILTER_BACKENDS": [
+        "django_filters.rest_framework.DjangoFilterBackend",
+        "rest_framework.filters.SearchFilter",
+        "rest_framework.filters.OrderingFilter",
+    ],
+    # JSON formatting for better readability
+    "DEFAULT_RENDERER_CLASSES": [
+        "rest_framework.renderers.JSONRenderer",
+        "rest_framework.renderers.BrowsableAPIRenderer",  # Useful during development
+    ],
+}
+
+# Configure Spectacular for your medical API (without security for now)
+SPECTACULAR_SETTINGS = {
+    "TITLE": "NAMASTE-ICD11 EMR Integration API",
+    "DESCRIPTION": """
+    API for integrating India's NAMASTE terminologies and WHO ICD-11 
+    Traditional Medicine Module 2 (TM2) into FHIR-compliant EMR systems.
+    
+    Features:
+    - NAMASTE code lookup with PostgreSQL fuzzy search (pg_trgm)
+    - ICD-11 TM2 and Biomedicine mapping
+    - WHO International Terminologies integration
+    - FHIR R4 compliance
+    - OAuth 2.0 security with ABHA tokens (to be implemented)
+    """,
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SCHEMA_PATH_PREFIX": "/api/v1/",
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SORT_OPERATIONS": False,
+    # Use local static files for medical environment security
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
+    # Basic UI configurations
+    "SWAGGER_UI_SETTINGS": {
+        "displayRequestDuration": True,
+        "docExpansion": "none",  # Keep operations collapsed initially
+        "filter": True,  # Enable search/filter in UI
+        "showExtensions": True,
+        "showCommonExtensions": True,
+    },
 }
 
 
