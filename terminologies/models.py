@@ -104,26 +104,6 @@ class ICD11Term(models.Model):
         return f"{self.code} - {self.title}" if self.code else self.title
 
 
-class ICD11Synonym(models.Model):
-    term = models.ForeignKey(
-        ICD11Term, on_delete=models.CASCADE, related_name="synonyms"
-    )
-    label = models.CharField(max_length=255, db_index=True)
-    search_vector = SearchVectorField(null=True, blank=True)
-
-    class Meta:
-        db_table = "icd11_synonyms"
-        verbose_name = "ICD-11 Synonym"
-        verbose_name_plural = "ICD-11 Synonyms"
-        indexes = [
-            models.Index(fields=["label"]),
-            GinIndex(fields=["search_vector"], name="icd11_synonym_search_gin"),
-        ]
-
-    def __str__(self):
-        return self.label
-
-
 class TermMapping(models.Model):
     """Store mappings starting from NAMASTE terms to ICD-11"""
 
