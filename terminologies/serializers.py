@@ -3,78 +3,15 @@ from rest_framework import serializers
 from .models import Ayurvedha, ICD11Term, Siddha, TermMapping, Unani
 
 
-class ICD11TermSerializer(serializers.ModelSerializer):
-    """
-    Complete serializer for ICD11Term model.
-    Includes nested read-only synonyms.
-    """
-
-    display_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ICD11Term
-        fields = [
-            "id",
-            "foundation_uri",
-            "code",
-            "title",
-            "synonyms",
-            "display_name",
-        ]
-        read_only_fields = ["id", "display_name"]
-
-    def get_display_name(self, obj):
-        """
-        Get formatted display name for ICD11Term instance.
-        """
-        if obj.code:
-            return f"{obj.code} - {obj.title}"
-        return obj.title
-
-    def validate_foundation_uri(self, value):
-        """
-        Validate that foundation_uri is required and unique.
-        """
-        if not value:
-            raise serializers.ValidationError("Foundation URI is required.")
-        if self.instance and self.instance.foundation_uri == value:
-            return value
-        if ICD11Term.objects.filter(foundation_uri=value).exists():
-            raise serializers.ValidationError(
-                "An ICD-11 term with this foundation URI already exists."
-            )
-        return value
-
-    def validate_title(self, value):
-        """
-        Validate that title is not empty or whitespace only.
-        """
-        if not value or not value.strip():
-            raise serializers.ValidationError("Title cannot be empty.")
-        return value.strip()
-
-    def validate_code(self, value):
-        """
-        Normalize code to None if empty string.
-        """
-        if value and not value.strip():
-            return None
-        return value
-
-
 class ICD11TermListSerializer(serializers.ModelSerializer):
     """
-    Lightweight serializer for list views of ICD11Term.
+    Lightweight serializer for listing ICD-11 terms.
+    Contains only essential fields for performance optimization.
     """
 
     class Meta:
         model = ICD11Term
-        fields = [
-            "id",
-            "foundation_uri",
-            "code",
-            "title",
-        ]
+        fields = ["foundation_uri", "code", "title", "browser_url", "class_kind"]
         read_only_fields = fields
 
 
