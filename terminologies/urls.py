@@ -12,8 +12,10 @@ urlpatterns = [
         name="ayurvedha_autocomplete/",
     ),
     path("ayurveda/csv/upload/", views.ayurveda_csv_upload, name="ayurveda_csv_upload"),
+    # the siddha
     path("siddha/search/", views.siddha_fuzzy_search, name="siddha_fuzzy_search"),
     path("siddha/autocomplete/", views.siddha_autocomplete, name="siddha_autocomplete"),
+    path("siddha/csv/upload/", views.siddha_csv_upload, name="siddha_csv_upload"),
     path("unani/search/", views.unani_fuzzy_search, name="unani_fuzzy_search"),
     path("unani/autocomplete/", views.unani_autocomplete, name="unani_autocomplete"),
     path("unani/csv/upload/", views.unani_csv_upload, name="unani_csv_upload"),
