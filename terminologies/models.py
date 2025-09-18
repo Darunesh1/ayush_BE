@@ -83,32 +83,34 @@ class Unani(BaseNamasteModel):
 
 
 class ICD11Term(models.Model):
-    foundation_uri = models.URLField(max_length=500, unique=True)
+    # Core identifiers
+    foundation_uri = models.URLField(max_length=500, unique=True, db_index=True)
     code = models.CharField(max_length=50, null=True, blank=True, db_index=True)
     title = models.CharField(max_length=255, db_index=True)
+
+    # Clinical definitions
     definition = models.TextField(null=True, blank=True)
     long_definition = models.TextField(null=True, blank=True)
 
-    # Search vector - will be maintained by database trigger
+    # JSON fields for all list data
+    index_terms = models.JSONField(default=list, blank=True)
+    parent = models.JSONField(default=list, blank=True)
+    inclusions = models.JSONField(default=list, blank=True)  # Store here
+    exclusions = models.JSONField(default=list, blank=True)  # Store here
+    postcoordination_scales = models.JSONField(default=list, blank=True)
+    related_perinatal_entities = models.JSONField(default=list, blank=True)
+
+    # Metadata
+    browser_url = models.URLField(max_length=500, blank=True)
+    source = models.URLField(max_length=500, blank=True)
+    class_kind = models.CharField(max_length=50, blank=True)
+
+    # Search vector
     search_vector = SearchVectorField(null=True, blank=True)
 
-    # Timestamps
+    # Audit fields
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = "icd_terms"
-        verbose_name = "ICD Term"
-        verbose_name_plural = "ICD Terms"
-        indexes = [
-            models.Index(fields=["code"]),
-            models.Index(fields=["title"]),
-            models.Index(fields=["created_at"]),
-            GinIndex(fields=["search_vector"], name="icd_search_gin"),
-        ]
-
-    def __str__(self):
-        return f"{self.code} - {self.title}" if self.code else self.title
 
 
 class TermMapping(models.Model):
