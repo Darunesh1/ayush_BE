@@ -8,7 +8,7 @@ urlpatterns = [
     ),
     path(
         "ayurveda/autocomplete/",
-        views.ayurvedha_autocomplete,
+        views.ayurveda_autocomplete,
         name="ayurvedha_autocomplete",
     ),
     path("siddha/search/", views.siddha_fuzzy_search, name="siddha_fuzzy_search"),

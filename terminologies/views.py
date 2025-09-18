@@ -198,93 +198,99 @@ def ayurvedha_fuzzy_search(request):
 
 @extend_schema(
     summary="Ayurveda Autocomplete",
-    description="Get autocomplete suggestions for Ayurveda terms",
+    description="Fast autocomplete for Ayurveda terms - returns only English name titles for optimal performance",
     parameters=[
         OpenApiParameter(
             name="q",
             type=OpenApiTypes.STR,
             location=OpenApiParameter.QUERY,
-            description="Search term for autocomplete",
+            description="Search term for autocomplete (searches across English, Hindi, and diacritical names)",
             required=True,
+            examples=[
+                OpenApiExample(
+                    "Partial English", value="fev", description="Matches 'fever'"
+                ),
+                OpenApiExample(
+                    "Hindi term", value="बुख", description="Searches Hindi names"
+                ),
+                OpenApiExample(
+                    "Diacritical",
+                    value="jvar",
+                    description="Searches transliterated terms",
+                ),
+            ],
         ),
         OpenApiParameter(
             name="limit",
             type=OpenApiTypes.INT,
             location=OpenApiParameter.QUERY,
-            description="Maximum number of suggestions (default: 8, max: 12)",
+            description="Maximum results to return (default: 10, max: 20)",
             required=False,
         ),
     ],
-    responses={200: OpenApiTypes.OBJECT},  # Custom response format
-    tags=["Ayurveda"],
+    responses={
+        200: OpenApiResponse(
+            description="List of matching English name titles only",
+            response={
+                "type": "array",
+                "items": {"type": "string"},
+                "example": ["fever", "fever with headache", "febrile condition"],
+            },
+        )
+    },
+    tags=["Autocomplete"],
+    operation_id="ayurveda_autocomplete",
 )
 @api_view(["GET"])
-def ayurvedha_autocomplete(request):
+def ayurveda_autocomplete(request):
     search_term = request.query_params.get("q", "").strip()
-    limit = min(int(request.query_params.get("limit", 8)), 12)
+    limit = min(int(request.query_params.get("limit", 10)), 20)
 
-    if not search_term or len(search_term) < 2:
-        return Response({"suggestions": []})
+    if (
+        not search_term or len(search_term) < 1
+    ):  # Reduced from 2 to 1 for better autocomplete
+        return Response([])
 
-    queryset = get_autocomplete_queryset(search_term, limit)
-
-    suggestions = [
-        {
-            "id": item.id,
-            "code": item.code,
-            "title": item.english_name,
-            "subtitle": item.hindi_name if item.hindi_name else None,
-            "score": round(float(getattr(item, "autocomplete_score", 0)), 1),
-        }
-        for item in queryset
-    ]
-
-    return Response(
-        {"suggestions": suggestions, "query": search_term, "count": len(suggestions)}
+    # Use the same pattern as your working fuzzy search
+    fuzzy_qs = Ayurvedha.objects.annotate(
+        similarity_code=TrigramSimilarity("code", search_term),
+        similarity_english=TrigramSimilarity("english_name", search_term),
+        similarity_hindi=TrigramSimilarity("hindi_name", search_term),
+        similarity_diacritical=TrigramSimilarity("diacritical_name", search_term),
+    ).filter(
+        Q(similarity_code__gt=0.1)
+        | Q(similarity_english__gt=0.1)
+        | Q(similarity_hindi__gt=0.1)
+        | Q(similarity_diacritical__gt=0.1)
     )
 
-
-def get_autocomplete_queryset(search_term, limit):
-    # Exact matches first (fastest)
+    # Exact matches for better autocomplete experience
     exact_qs = Ayurvedha.objects.filter(
-        Q(code__iexact=search_term) | Q(english_name__iexact=search_term)
-    ).only("id", "code", "english_name", "hindi_name")
+        Q(code__icontains=search_term)
+        | Q(english_name__icontains=search_term)
+        | Q(hindi_name__icontains=search_term)
+        | Q(diacritical_name__icontains=search_term)
+    )
 
-    # Prefix matches (fast with indexes)
-    prefix_qs = Ayurvedha.objects.filter(
-        Q(code__istartswith=search_term) | Q(english_name__istartswith=search_term)
-    ).only("id", "code", "english_name", "hindi_name")
-
-    # Fuzzy matches (only for 3+ characters)
-    fuzzy_qs = Ayurvedha.objects.none()
-    if len(search_term) >= 3:
-        fuzzy_qs = (
-            Ayurvedha.objects.annotate(
-                eng_sim=TrigramSimilarity("english_name", search_term),
-                code_sim=TrigramSimilarity("code", search_term),
+    # Combine queries and apply weighted scoring
+    queryset = (
+        (fuzzy_qs | exact_qs)
+        .distinct()
+        .annotate(
+            weighted_score=(
+                TrigramSimilarity("english_name", search_term) * 2.5
+                + TrigramSimilarity("code", search_term) * 1.0
+                + TrigramSimilarity("hindi_name", search_term) * 0.8
+                + TrigramSimilarity("diacritical_name", search_term) * 0.8
             )
-            .filter(Q(eng_sim__gt=0.3) | Q(code_sim__gt=0.4))
-            .only("id", "code", "english_name", "hindi_name")
         )
+        .order_by("-weighted_score", "english_name")
+    )
 
-    # Combine and score
-    combined_qs = (exact_qs | prefix_qs | fuzzy_qs).distinct()
+    # Extract only english_name titles
+    titles = list(queryset.values_list("english_name", flat=True)[:limit])
 
-    return combined_qs.annotate(
-        autocomplete_score=Case(
-            When(
-                Q(code__iexact=search_term) | Q(english_name__iexact=search_term),
-                then=Value(100.0),
-            ),
-            When(Q(code__istartswith=search_term), then=Value(90.0)),
-            When(Q(english_name__istartswith=search_term), then=Value(85.0)),
-            default=(
-                TrigramSimilarity("english_name", search_term) * 60.0
-                + TrigramSimilarity("code", search_term) * 40.0
-            ),
-            output_field=FloatField(),
-        )
-    ).order_by("-autocomplete_score", "english_name")[:limit]
+    return Response(titles)
 
 
 @extend_schema(
