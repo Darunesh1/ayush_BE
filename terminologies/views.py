@@ -238,7 +238,7 @@ def ayurvedha_fuzzy_search(request):
             },
         )
     },
-    tags=["Autocomplete"],
+    tags=["Ayurveda"],
     operation_id="ayurveda_autocomplete",
 )
 @api_view(["GET"])
@@ -449,6 +449,107 @@ def siddha_fuzzy_search(request):
     # Serialize results
     serializer = SiddhaListSerializer(page, many=True)
     return paginator.get_paginated_response(serializer.data)
+
+
+@extend_schema(
+    summary="Siddha Autocomplete",
+    description="Fast autocomplete for Siddha terms - returns only English name titles for optimal performance",
+    parameters=[
+        OpenApiParameter(
+            name="q",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Search term for autocomplete (searches across English, Tamil, and romanized names)",
+            required=True,
+            examples=[
+                OpenApiExample(
+                    "Partial English", value="fev", description="Matches 'fever'"
+                ),
+                OpenApiExample(
+                    "Tamil term", value="காய்ச்சல்", description="Searches Tamil names"
+                ),
+                OpenApiExample(
+                    "Romanized",
+                    value="kaaychchal",
+                    description="Searches romanized Tamil terms",
+                ),
+                OpenApiExample(
+                    "Code search", value="S001", description="Searches by Siddha codes"
+                ),
+            ],
+        ),
+        OpenApiParameter(
+            name="limit",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Maximum results to return (default: 10, max: 20)",
+            required=False,
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(
+            description="List of matching English name titles only",
+            response={
+                "type": "array",
+                "items": {"type": "string"},
+                "example": ["fever", "fever with headache", "febrile condition"],
+            },
+        )
+    },
+    tags=["Siddha"],
+    operation_id="siddha_autocomplete",
+)
+@api_view(["GET"])
+def siddha_autocomplete(request):
+    search_term = request.query_params.get("q", "").strip()
+    limit = min(int(request.query_params.get("limit", 10)), 20)
+
+    if not search_term or len(search_term) < 1:
+        return Response([])
+
+    # Use the same pattern as your working Ayurveda fuzzy search
+    fuzzy_qs = Siddha.objects.annotate(
+        similarity_code=TrigramSimilarity("code", search_term),
+        similarity_english=TrigramSimilarity("english_name", search_term),
+        similarity_tamil=TrigramSimilarity("tamil_name", search_term),
+        similarity_romanized=TrigramSimilarity("romanized_name", search_term),
+    ).filter(
+        Q(similarity_code__gt=0.1)
+        | Q(similarity_english__gt=0.1)
+        | Q(similarity_tamil__gt=0.1)
+        | Q(similarity_romanized__gt=0.1)
+    )
+
+    # Exact matches for better autocomplete experience
+    exact_qs = Siddha.objects.filter(
+        Q(code__icontains=search_term)
+        | Q(english_name__icontains=search_term)
+        | Q(tamil_name__icontains=search_term)
+        | Q(romanized_name__icontains=search_term)
+    )
+
+    # Combine queries and apply weighted scoring
+    queryset = (
+        (fuzzy_qs | exact_qs)
+        .distinct()
+        .annotate(
+            weighted_score=(
+                TrigramSimilarity("english_name", search_term)
+                * 2.5  # Prioritize English
+                + TrigramSimilarity("code", search_term)
+                * 1.0  # Standard weight for codes
+                + TrigramSimilarity("tamil_name", search_term)
+                * 0.8  # Tamil language support
+                + TrigramSimilarity("romanized_name", search_term)
+                * 0.8  # Romanized Tamil
+            )
+        )
+        .order_by("-weighted_score", "english_name")
+    )
+
+    # Extract only english_name titles
+    titles = list(queryset.values_list("english_name", flat=True)[:limit])
+    return Response(titles)
 
 
 @extend_schema(
