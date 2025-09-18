@@ -2,6 +2,10 @@ from django.contrib.postgres.search import SearchQuery, SearchRank, TrigramSimil
 from django.core.paginator import Paginator
 from django.db.models import Case, Count, F, FloatField, Q, Value, When
 from django.shortcuts import get_object_or_404
+from drf_spectacular.types import OpenApiTypes
+
+# ADD THESE IMPORTS FOR drf-spectacular
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.decorators import api_view
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
@@ -21,6 +25,21 @@ from .serializers import (
 from .services.mapping_service import NamasteToICDMappingService
 
 
+@extend_schema(
+    summary="Ayurveda Fuzzy Search",
+    description="Perform fuzzy search on Ayurveda terms using PostgreSQL pg_trgm extension",
+    parameters=[
+        OpenApiParameter(
+            name="q",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Search term for fuzzy matching",
+            required=False,
+        ),
+    ],
+    responses={200: AyurvedhaListSerializer(many=True)},
+    tags=["Ayurveda"],
+)
 @api_view(["GET"])
 def ayurvedha_fuzzy_search(request):
     search_term = request.query_params.get("q", "").strip()
@@ -74,6 +93,28 @@ def ayurvedha_fuzzy_search(request):
     return paginator.get_paginated_response(serializer.data)
 
 
+@extend_schema(
+    summary="Ayurveda Autocomplete",
+    description="Get autocomplete suggestions for Ayurveda terms",
+    parameters=[
+        OpenApiParameter(
+            name="q",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Search term for autocomplete",
+            required=True,
+        ),
+        OpenApiParameter(
+            name="limit",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Maximum number of suggestions (default: 8, max: 12)",
+            required=False,
+        ),
+    ],
+    responses={200: OpenApiTypes.OBJECT},  # Custom response format
+    tags=["Ayurveda"],
+)
 @api_view(["GET"])
 def ayurvedha_autocomplete(request):
     search_term = request.query_params.get("q", "").strip()
@@ -143,6 +184,21 @@ def get_autocomplete_queryset(search_term, limit):
     ).order_by("-autocomplete_score", "english_name")[:limit]
 
 
+@extend_schema(
+    summary="Siddha Fuzzy Search",
+    description="Perform fuzzy search on Siddha terms using PostgreSQL pg_trgm extension",
+    parameters=[
+        OpenApiParameter(
+            name="q",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Search term for fuzzy matching",
+            required=False,
+        ),
+    ],
+    responses={200: SiddhaListSerializer(many=True)},
+    tags=["Siddha"],
+)
 @api_view(["GET"])
 def siddha_fuzzy_search(request):
     search_term = request.query_params.get("q", "").strip()
@@ -183,6 +239,21 @@ def siddha_fuzzy_search(request):
     return paginator.get_paginated_response(serializer.data)
 
 
+@extend_schema(
+    summary="Unani Fuzzy Search",
+    description="Perform fuzzy search on Unani terms using PostgreSQL pg_trgm extension",
+    parameters=[
+        OpenApiParameter(
+            name="q",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Search term for fuzzy matching",
+            required=False,
+        ),
+    ],
+    responses={200: UnaniListSerializer(many=True)},
+    tags=["Unani"],
+)
 @api_view(["GET"])
 def unani_fuzzy_search(request):
     search_term = request.query_params.get("q", "").strip()
@@ -223,6 +294,35 @@ def unani_fuzzy_search(request):
     return paginator.get_paginated_response(serializer.data)
 
 
+@extend_schema(
+    summary="ICD-11 Advanced Search",
+    description="Advanced search through ICD-11 terms including Traditional Medicine Module 2",
+    parameters=[
+        OpenApiParameter(
+            name="q",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Search term",
+            required=False,
+        ),
+        OpenApiParameter(
+            name="fuzzy",
+            type=OpenApiTypes.BOOL,
+            location=OpenApiParameter.QUERY,
+            description="Enable fuzzy matching (default: false)",
+            required=False,
+        ),
+        OpenApiParameter(
+            name="threshold",
+            type=OpenApiTypes.FLOAT,
+            location=OpenApiParameter.QUERY,
+            description="Similarity threshold for fuzzy search (default: 0.2)",
+            required=False,
+        ),
+    ],
+    responses={200: ICD11TermListSerializer(many=True)},
+    tags=["ICD-11"],
+)
 @api_view(["GET"])
 def icd11_advanced_search(request):
     search_term = request.query_params.get("q", "").strip()
