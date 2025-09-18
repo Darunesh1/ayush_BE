@@ -11,6 +11,7 @@ urlpatterns = [
         views.ayurveda_autocomplete,
         name="ayurvedha_autocomplete/",
     ),
+    path("ayurveda/csv/upload/", views.ayurveda_csv_upload, name="ayurveda_csv_upload"),
     path("siddha/search/", views.siddha_fuzzy_search, name="siddha_fuzzy_search"),
     path("siddha/autocomplete/", views.siddha_autocomplete, name="siddha_autocomplete"),
     path("unani/search/", views.unani_fuzzy_search, name="unani_fuzzy_search"),

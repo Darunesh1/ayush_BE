@@ -1,9 +1,13 @@
+import csv
+from io import TextIOWrapper
+
 from django.contrib.postgres.search import SearchQuery, SearchRank, TrigramSimilarity
 from django.core.paginator import Paginator
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Case, Count, F, FloatField, Q, Value, When
 from django.db.models.functions import Cast
 from django.shortcuts import get_object_or_404
+from drf_spectacular.openapi import AutoSchema
 from drf_spectacular.types import OpenApiTypes
 
 # ADD THESE IMPORTS FOR drf-spectacular
@@ -13,8 +17,10 @@ from drf_spectacular.utils import (
     OpenApiResponse,
     extend_schema,
 )
-from rest_framework.decorators import api_view
+from rest_framework import status
+from rest_framework.decorators import api_view, parser_classes
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from .models import Ayurvedha, ICD11Term, Siddha, TermMapping, Unani
@@ -291,6 +297,250 @@ def ayurveda_autocomplete(request):
     titles = list(queryset.values_list("english_name", flat=True)[:limit])
 
     return Response(titles)
+
+
+@extend_schema(
+    summary="Upload Ayurveda CSV",
+    description="Upload CSV file to populate Ayurveda terms database. Updates existing records by code or creates new ones.",
+    request={
+        "multipart/form-data": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "CSV file with Ayurveda terms (columns: code, english_name, description, hindi_name, diacritical_name)",
+                },
+                "update_search_vector": {
+                    "type": "boolean",
+                    "description": "Whether to update search vectors after import",
+                    "default": True,
+                },
+            },
+            "required": ["file"],
+        }
+    },
+    responses={
+        200: OpenApiResponse(
+            description="CSV processed successfully",
+            response={
+                "type": "object",
+                "properties": {
+                    "created": {
+                        "type": "integer",
+                        "description": "Number of new records created",
+                    },
+                    "updated": {
+                        "type": "integer",
+                        "description": "Number of existing records updated",
+                    },
+                    "skipped": {
+                        "type": "integer",
+                        "description": "Number of rows skipped due to errors",
+                    },
+                    "total_processed": {
+                        "type": "integer",
+                        "description": "Total rows processed",
+                    },
+                    "errors": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of error messages for failed rows",
+                    },
+                    "summary": {"type": "string", "description": "Processing summary"},
+                },
+            },
+        ),
+        400: OpenApiResponse(
+            description="Bad request - invalid file or format",
+            examples=[
+                OpenApiExample(
+                    "No file provided", value={"error": "CSV file not provided"}
+                ),
+                OpenApiExample(
+                    "Invalid CSV format",
+                    value={"error": "Invalid CSV format: missing required headers"},
+                ),
+            ],
+        ),
+        413: OpenApiResponse(description="File too large"),
+    },
+    tags=["Ayurveda"],
+    operation_id="ayurveda_csv_upload",
+)
+@api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
+def ayurveda_csv_upload(request):
+    """
+    Upload CSV file to populate Ayurveda terms database.
+
+    CSV Format:
+    - Required columns: code
+    - Optional columns: english_name, description, hindi_name, diacritical_name
+    - First row should contain headers
+    - Encoding: UTF-8
+
+    Processing Logic:
+    - If code exists: Update the existing record
+    - If code doesn't exist: Create new record
+    - Ensures no duplicate codes in database
+    """
+
+    # Validate file upload
+    file = request.FILES.get("file")
+    if not file:
+        return Response(
+            {"error": "CSV file not provided"}, status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Check file size (limit to 10MB)
+    if file.size > 10 * 1024 * 1024:
+        return Response(
+            {"error": "File size too large. Maximum 10MB allowed"},
+            status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
+
+    # Check file extension
+    if not file.name.endswith(".csv"):
+        return Response(
+            {"error": "Invalid file format. Only CSV files allowed"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    update_search_vector = (
+        request.data.get("update_search_vector", "true").lower() == "true"
+    )
+
+    try:
+        # Read CSV file
+        csv_file = TextIOWrapper(file.file, encoding="utf-8")
+        reader = csv.DictReader(csv_file)
+
+        # Validate required headers
+        required_headers = ["code"]
+
+        if not all(header in reader.fieldnames for header in required_headers):
+            return Response(
+                {"error": f"Missing required headers: {required_headers}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    except UnicodeDecodeError:
+        return Response(
+            {"error": "Invalid file encoding. Please use UTF-8 encoding"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Failed to read CSV file: {str(e)}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Process CSV data
+    created_count = 0
+    updated_count = 0
+    skipped_count = 0
+    total_processed = 0
+    errors = []
+
+    with transaction.atomic():
+        for row_num, row in enumerate(
+            reader, start=2
+        ):  # Start at 2 because of header row
+            total_processed += 1
+
+            # Validate required fields
+            code = row.get("code", "").strip()
+            if not code:
+                errors.append(f"Row {row_num}: Missing or empty code field")
+                skipped_count += 1
+                continue
+
+            # Validate code format (basic validation)
+            if len(code) > 50:
+                errors.append(
+                    f'Row {row_num}: Code "{code}" exceeds maximum length of 50 characters'
+                )
+                skipped_count += 1
+                continue
+
+            try:
+                # Check if record exists
+                ayurvedha_obj, created = Ayurvedha.objects.get_or_create(
+                    code=code,
+                    defaults={
+                        "english_name": row.get("english_name", "").strip() or None,
+                        "description": row.get("description", "").strip() or None,
+                        "hindi_name": row.get("hindi_name", "").strip() or None,
+                        "diacritical_name": row.get("diacritical_name", "").strip()
+                        or None,
+                    },
+                )
+
+                if created:
+                    created_count += 1
+                else:
+                    # Update existing record
+                    updated_fields = []
+
+                    new_english_name = row.get("english_name", "").strip() or None
+                    if (
+                        new_english_name
+                        and new_english_name != ayurvedha_obj.english_name
+                    ):
+                        ayurvedha_obj.english_name = new_english_name
+                        updated_fields.append("english_name")
+
+                    new_description = row.get("description", "").strip() or None
+                    if new_description and new_description != ayurvedha_obj.description:
+                        ayurvedha_obj.description = new_description
+                        updated_fields.append("description")
+
+                    new_hindi_name = row.get("hindi_name", "").strip() or None
+                    if new_hindi_name and new_hindi_name != ayurvedha_obj.hindi_name:
+                        ayurvedha_obj.hindi_name = new_hindi_name
+                        updated_fields.append("hindi_name")
+
+                    new_diacritical_name = (
+                        row.get("diacritical_name", "").strip() or None
+                    )
+                    if (
+                        new_diacritical_name
+                        and new_diacritical_name != ayurvedha_obj.diacritical_name
+                    ):
+                        ayurvedha_obj.diacritical_name = new_diacritical_name
+                        updated_fields.append("diacritical_name")
+
+                    if updated_fields:
+                        ayurvedha_obj.save()
+                        updated_count += 1
+
+            except Exception as e:
+                errors.append(
+                    f'Row {row_num}: Failed to process code "{code}" - {str(e)}'
+                )
+                skipped_count += 1
+                continue
+
+    # Prepare response
+    result = {
+        "created": created_count,
+        "updated": updated_count,
+        "skipped": skipped_count,
+        "total_processed": total_processed,
+        "errors": errors,
+        "summary": f"Processed {total_processed} rows: {created_count} created, {updated_count} updated, {skipped_count} skipped",
+    }
+
+    # Determine response status
+    if errors and (created_count == 0 and updated_count == 0):
+        status_code = status.HTTP_400_BAD_REQUEST
+    elif errors:
+        status_code = status.HTTP_207_MULTI_STATUS  # Partial success
+    else:
+        status_code = status.HTTP_200_OK
+
+    return Response(result, status=status_code)
 
 
 @extend_schema(
