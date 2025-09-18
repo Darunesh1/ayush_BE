@@ -1,20 +1,6 @@
 from rest_framework import serializers
 
-from .models import Ayurvedha, ICD11Synonym, ICD11Term, Siddha, TermMapping, Unani
-
-
-class ICD11SynonymSerializer(serializers.ModelSerializer):
-    """
-    Serializer for ICD11Synonym model representing alternative labels.
-    """
-
-    class Meta:
-        model = ICD11Synonym
-        fields = [
-            "id",
-            "label",
-        ]
-        read_only_fields = ["id"]
+from .models import Ayurvedha, ICD11Term, Siddha, TermMapping, Unani
 
 
 class ICD11TermSerializer(serializers.ModelSerializer):
@@ -23,7 +9,6 @@ class ICD11TermSerializer(serializers.ModelSerializer):
     Includes nested read-only synonyms.
     """
 
-    synonyms = ICD11SynonymSerializer(many=True, read_only=True)
     display_name = serializers.SerializerMethodField()
 
     class Meta:
@@ -617,7 +602,6 @@ class TermMappingDetailSerializer(serializers.ModelSerializer):
     def get_icd_mapping(self, obj):
         """Get ICD mapping with similarity score"""
         icd_data = ICD11TermSerializer(obj.icd_term).data
-        icd_data["similarity_score"] = round(obj.icd_similarity, 3)
         return icd_data
 
     def get_cross_system_matches(self, obj):
