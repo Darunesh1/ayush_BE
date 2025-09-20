@@ -1,3 +1,5 @@
+import uuid
+
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import GinIndex
@@ -11,6 +13,8 @@ class TerminologyMapping(models.Model):
     Core mapping configuration between NAMASTE systems and ICD-11
     Tracks which terminology systems are being mapped and their settings
     """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     name = models.CharField(max_length=255, unique=True)
     description = models.TextField(blank=True)
@@ -129,6 +133,8 @@ class ConceptMapping(models.Model):
     Individual concept mapping between a NAMASTE term and an ICD-11 term
     Stores the AI-generated mapping with similarity scores and validation status
     """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     # Link to the mapping configuration
     mapping = models.ForeignKey(
@@ -370,6 +376,8 @@ class MappingAudit(models.Model):
     Audit trail for mapping changes to meet regulatory requirements
     Tracks all changes to ConceptMappings for compliance and debugging
     """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     # Link to the mapping that was changed
     concept_mapping = models.ForeignKey(
