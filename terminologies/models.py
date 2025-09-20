@@ -11,6 +11,14 @@ class BaseNamasteModel(models.Model):
     )
     # Pre-computed search vector for full-text search
     search_vector = SearchVectorField(null=True, blank=True)
+    # BioBERT embedding fields for ONNX service
+    embedding = models.JSONField(
+        null=True, blank=True, help_text="768-dimensional TinyBioBERT embedding vector"
+    )
+    embedding_updated_at = models.DateTimeField(null=True, blank=True)
+    embedding_model_version = models.CharField(
+        max_length=200, blank=True, help_text="BioBERT model version used for embedding"
+    )
 
     class Meta:
         abstract = True
@@ -28,6 +36,8 @@ class BaseNamasteModel(models.Model):
             ),
             # Full-text search vector index
             GinIndex(fields=["search_vector"], name="base_search_vector_gin"),
+            # Embedding index
+            models.Index(fields=["embedding_updated_at"]),
         ]
 
     def __str__(self):
