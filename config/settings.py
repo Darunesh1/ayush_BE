@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     "fhir",
     "auth_abha",
     "analytics",
+    "namasthe_mapping",
 ]
 
 MIDDLEWARE = [
