@@ -4,8 +4,7 @@ services:
     build: .
     command: >
       sh -lc "
-        uv run manage.py collectstatic
-        uv run manage.py makemigrations &&
+        uv run manage.py collectstatic --noinput &&
         uv run manage.py migrate &&
         uv run uvicorn config.asgi:application --host 0.0.0.0 --port 8000 --reload
       "
@@ -40,6 +39,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - ayushsync-app-network
 
@@ -65,8 +66,109 @@ services:
     networks:
       - ayushsync-app-network
 
+  redis:
+    image: redis:7-alpine
+    container_name: ayushsync_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ayushsync_redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - ayushsync-app-network
+
+  celery:
+    build: .
+    command: uv run celery -A config worker -E -l info
+    container_name: ayushsync_celery
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /app
+          ignore:
+            - .git/
+            - .venv/
+            - node_modules/
+            - __pycache__/
+            - staticfiles/
+            - db.sqlite3
+        - action: restart
+          path: pyproject.toml
+        - action: restart
+          path: uv.lock
+    environment:
+      - UV_COMPILE_BYTECODE=1
+      - UV_LINK_MODE=copy
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ayushsync-app-network
+
+  beat:
+    build: .
+    command: uv run celery -A config beat -l INFO --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    container_name: ayushsync_beat
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /app
+          ignore:
+            - .git/
+            - .venv/
+            - node_modules/
+            - __pycache__/
+            - staticfiles/
+            - db.sqlite3
+        - action: restart
+          path: pyproject.toml
+        - action: restart
+          path: uv.lock
+    environment:
+      - UV_COMPILE_BYTECODE=1
+      - UV_LINK_MODE=copy
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ayushsync-app-network
+
+  flower:
+    build: .
+    command: uv run celery -A config flower --basic_auth=admin:ayushsync2025
+    container_name: ayushsync_flower
+    ports:
+      - "5555:5555"
+    environment:
+      - UV_COMPILE_BYTECODE=1
+      - UV_LINK_MODE=copy
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - ayushsync-app-network
+
 volumes:
   ayushsync_data:
+  ayushsync_redis_data:
 
 networks:
   ayushsync-app-network:
