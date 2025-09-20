@@ -151,7 +151,7 @@ services:
 
   flower:
     build: .
-    command: uv run celery -A config flower --basic_auth=admin:ayushsync2025
+    command: uv run celery -A config flower --basic_auth=admin:admin
     container_name: ayushsync_flower
     ports:
       - "5555:5555"
