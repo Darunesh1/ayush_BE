@@ -205,6 +205,14 @@ class ICD11Term(models.Model):
 
     # Search vector
     search_vector = SearchVectorField(null=True, blank=True)
+    # BioBERT embedding fields for ONNX service
+    embedding = models.JSONField(
+        null=True, blank=True, help_text="768-dimensional TinyBioBERT embedding vector"
+    )
+    embedding_updated_at = models.DateTimeField(null=True, blank=True)
+    embedding_model_version = models.CharField(
+        max_length=200, blank=True, help_text="BioBERT model version used for embedding"
+    )
 
     # Audit fields
     created_at = models.DateTimeField(auto_now_add=True)
@@ -236,10 +244,42 @@ class ICD11Term(models.Model):
             GinIndex(
                 fields=["code"], name="icd11_code_trgm", opclasses=["gin_trgm_ops"]
             ),
+            # Embedding index
+            models.Index(fields=["embedding_updated_at"]),
         ]
 
     def __str__(self):
         return f"{self.code} - {self.title}" if self.code else self.title
+
+    def needs_embedding_update(self, model_version: str) -> bool:
+        """Check if embedding needs regeneration"""
+        if not self.embedding:
+            return True
+        if self.embedding_model_version != model_version:
+            return True
+        return False
+
+    def get_embedding_text(self) -> str:
+        """Get comprehensive text for BioBERT embedding generation"""
+        texts = []
+
+        # Main title
+        if self.title:
+            texts.append(self.title)
+
+        # Definitions
+        if self.definition:
+            texts.append(self.definition)
+        if self.long_definition:
+            texts.append(self.long_definition)
+
+        # Index terms and inclusions for better semantic matching
+        if self.index_terms:
+            texts.extend(self.index_terms[:5])  # Limit to top 5
+        if self.inclusions:
+            texts.extend(self.inclusions[:3])  # Limit to top 3
+
+        return " ".join(texts)
 
 
 class TermMapping(models.Model):
