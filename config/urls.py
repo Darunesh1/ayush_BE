@@ -31,6 +31,7 @@ urlpatterns = [
     path("auth/", include("auth_abha.urls")),
     path("analytics/", include("analytics.urls")),
     path("terminologies/", include("terminologies.urls")),
+    path("namasthe_mapping/", include("namasthe_mapping.urls")),
     # API Documentation endpoints
     path("schema/", SpectacularAPIView.as_view(), name="schema"),
     path("redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
