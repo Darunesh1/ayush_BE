@@ -43,6 +43,23 @@ class BaseNamasteModel(models.Model):
     def __str__(self):
         return f"{self.code} - {self.english_name}"
 
+    def needs_embedding_update(self, model_version: str) -> bool:
+        """Check if embedding needs regeneration"""
+        if not self.embedding:
+            return True
+        if self.embedding_model_version != model_version:
+            return True
+        return False
+
+    def get_embedding_text(self) -> str:
+        """Get text for BioBERT embedding generation"""
+        texts = []
+        if self.english_name:
+            texts.append(self.english_name)
+        if self.description:
+            texts.append(self.description)
+        return " ".join(texts)
+
 
 class Ayurvedha(BaseNamasteModel):
     hindi_name = models.CharField(max_length=255, null=True, blank=True, db_index=True)
