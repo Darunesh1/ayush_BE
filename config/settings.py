@@ -298,3 +298,7 @@ LOGGING = {
         },
     },
 }
+# BioBERT Configuration
+BIOBERT_API_TIMEOUT = 30  # seconds
+BIOBERT_BATCH_SIZE = 5  # API batch size
+BIOBERT_RATE_LIMIT = 1  # seconds between batches
