@@ -260,26 +260,94 @@ class ICD11Term(models.Model):
         return False
 
     def get_embedding_text(self) -> str:
-        """Get comprehensive text for BioBERT embedding generation"""
+        """Generate embedding text with robust data type handling"""
+
         texts = []
 
-        # Main title
+        def safe_extract_text(field_value):
+            """Safely extract string from various field types"""
+            if field_value is None:
+                return ""
+            elif isinstance(field_value, str):
+                return field_value.strip()
+            elif isinstance(field_value, dict):
+                # Extract meaningful text from dictionary
+                for key in ["title", "name", "label", "value", "text"]:
+                    if key in field_value and field_value[key]:
+                        return str(field_value[key]).strip()
+                # Fallback: join all non-empty values
+                return " ".join(
+                    str(v).strip()
+                    for v in field_value.values()
+                    if v and str(v).strip() and not isinstance(v, dict)
+                )
+            elif isinstance(field_value, (list, tuple)):
+                # Extract strings from list/tuple
+                text_parts = []
+                for item in field_value:
+                    if isinstance(item, str) and item.strip():
+                        text_parts.append(item.strip())
+                    elif isinstance(item, dict):
+                        dict_text = safe_extract_text(item)
+                        if dict_text:
+                            text_parts.append(dict_text)
+                    elif item and not isinstance(item, (dict, list, tuple)):
+                        text_parts.append(str(item).strip())
+                return " ".join(text_parts)
+            else:
+                return str(field_value).strip()
+
+        # Extract text from main fields
         if self.title:
-            texts.append(self.title)
+            title_text = safe_extract_text(self.title)
+            if title_text:
+                texts.append(title_text)
 
-        # Definitions
         if self.definition:
-            texts.append(self.definition)
+            def_text = safe_extract_text(self.definition)
+            if def_text:
+                texts.append(def_text)
+
         if self.long_definition:
-            texts.append(self.long_definition)
+            long_def_text = safe_extract_text(self.long_definition)
+            if long_def_text:
+                texts.append(long_def_text)
 
-        # Index terms and inclusions for better semantic matching
+        # Handle existing JSON fields
         if self.index_terms:
-            texts.extend(self.index_terms[:5])  # Limit to top 5
-        if self.inclusions:
-            texts.extend(self.inclusions[:3])  # Limit to top 3
+            index_text = safe_extract_text(self.index_terms)
+            if index_text:
+                texts.append(index_text)
 
-        return " ".join(texts)
+        if self.inclusions:
+            inclusion_text = safe_extract_text(self.inclusions)
+            if inclusion_text:
+                texts.append(inclusion_text)
+
+        if self.exclusions:
+            exclusion_text = safe_extract_text(self.exclusions)
+            if exclusion_text:
+                texts.append(f"excludes {exclusion_text}")
+
+        # Optional: Include postcoordination scales if they contain useful text
+        if self.postcoordination_scales:
+            scale_text = safe_extract_text(self.postcoordination_scales)
+            if scale_text:
+                texts.append(scale_text)
+
+        # Join all valid text parts
+        result = " ".join(texts).strip()
+
+        # Quality fallbacks
+        if not result and self.code:
+            result = f"Medical classification code {self.code}"
+        elif not result:
+            result = "Medical terminology classification"
+
+        # Final cleanup - remove extra whitespace
+        result = " ".join(result.split())
+
+        return result
 
 
 class TermMapping(models.Model):
