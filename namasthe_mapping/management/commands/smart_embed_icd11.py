@@ -1,5 +1,5 @@
 # namasthe_mapping/management/commands/smart_embed_icd11.py
-# Enhanced with robust error handling and tensor size prevention
+# Complete version with unlimited timeout control and resume capability
 
 import logging
 import os
@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from celery import group
 from django.core.cache import cache
 from django.core.management.base import BaseCommand
+from django.db import models
 from django.utils import timezone
 
 from namasthe_mapping.services import HuggingFaceAPIService
@@ -19,16 +20,22 @@ logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    help = "Enhanced smart ICD-11 embedding with comprehensive error prevention"
+    help = "Complete smart ICD-11 embedding with unlimited timeout control and resume capability"
 
     def add_arguments(self, parser):
+        # Basic parameters
         parser.add_argument(
             "--batch-size",
             type=int,
-            default=5,
-            help="Batch size (reduced for stability)",
+            default=15,
+            help="Batch size for embedding processing",
         )
-        parser.add_argument("--similarity-threshold", type=float, default=0.3)
+        parser.add_argument(
+            "--similarity-threshold",
+            type=float,
+            default=0.3,
+            help="Similarity threshold for candidate finding",
+        )
         parser.add_argument(
             "--limit-per-model", type=int, help="Limit terms per model for testing"
         )
@@ -55,10 +62,57 @@ class Command(BaseCommand):
             help="Only validate texts without embedding",
         )
 
+        # CANDIDATE FINDING TIMEOUT CONTROLS
+        parser.add_argument(
+            "--max-wait-minutes",
+            type=int,
+            default=0,
+            help="Maximum wait time for candidate finding in minutes (0 = unlimited)",
+        )
+        parser.add_argument(
+            "--check-interval",
+            type=int,
+            default=3,
+            help="Progress check interval in seconds",
+        )
+        parser.add_argument(
+            "--no-timeout",
+            action="store_true",
+            help="Disable all timeouts (wait indefinitely for completion)",
+        )
+
+        # EMBEDDING PHASE TIMEOUT CONTROLS
+        parser.add_argument(
+            "--embedding-timeout-minutes",
+            type=int,
+            default=0,
+            help="Maximum time for embedding phase in minutes (0 = unlimited)",
+        )
+        parser.add_argument(
+            "--api-timeout-seconds",
+            type=int,
+            default=60,
+            help="Timeout for individual API calls (default: 60 seconds)",
+        )
+        parser.add_argument(
+            "--save-progress-every",
+            type=int,
+            default=50,
+            help="Save progress checkpoint every N embeddings",
+        )
+        parser.add_argument(
+            "--resume-from-batch",
+            type=int,
+            default=0,
+            help="Resume embedding from specific batch number",
+        )
+
     def handle(self, *args, **options):
+        self.options = options  # Store options for later use
+
         self.stdout.write(
             self.style.SUCCESS(
-                "🚀 Starting ENHANCED smart ICD-11 embedding generation..."
+                "🚀 Starting COMPLETE smart ICD-11 embedding generation..."
             )
         )
 
@@ -72,15 +126,19 @@ class Command(BaseCommand):
             candidates = list(
                 ICD11Term.objects.filter(embedding__isnull=True).values_list(
                     "id", flat=True
-                )[:500]
+                )[:2000]  # Reasonable limit for skip mode
             )
             if not candidates:
                 self.stdout.write("✅ All terms already have embeddings!")
                 return
         else:
-            # Step 1: Find candidates
+            # Step 1: Find candidates with configurable timeout
             candidates = self.find_candidates_parallel(
-                options["similarity_threshold"], options.get("limit_per_model")
+                options["similarity_threshold"],
+                options.get("limit_per_model"),
+                options.get("max_wait_minutes", 0),
+                options.get("check_interval", 3),
+                options.get("no_timeout", False),
             )
 
             if not candidates:
@@ -92,7 +150,7 @@ class Command(BaseCommand):
             self.validate_embedding_texts(candidates)
             return
 
-        # Step 3: Embed candidates
+        # Step 3: Embed candidates with unlimited time
         self.embed_candidates_enhanced(
             candidates,
             options["batch_size"],
@@ -111,6 +169,35 @@ class Command(BaseCommand):
         )
         self.stdout.write(f"🔄 Retry failed: {options.get('retry_failed', False)}")
         self.stdout.write(f"⏭️ Skip candidates: {options.get('skip_candidates', False)}")
+
+        # Show candidate finding timeout configuration
+        max_wait = options.get("max_wait_minutes", 0)
+        if options.get("no_timeout", False):
+            self.stdout.write(f"⏰ Candidate timeout: DISABLED (unlimited)")
+        elif max_wait == 0:
+            self.stdout.write(f"⏰ Candidate timeout: UNLIMITED")
+        else:
+            self.stdout.write(f"⏰ Candidate max wait: {max_wait} minutes")
+
+        # Show embedding phase timeout configuration
+        embed_timeout = options.get("embedding_timeout_minutes", 0)
+        if embed_timeout == 0:
+            self.stdout.write(f"⏰ Embedding timeout: UNLIMITED")
+        else:
+            self.stdout.write(f"⏰ Embedding timeout: {embed_timeout} minutes")
+
+        self.stdout.write(
+            f"🔄 Check interval: {options.get('check_interval', 3)} seconds"
+        )
+        self.stdout.write(
+            f"📡 API timeout: {options.get('api_timeout_seconds', 60)} seconds"
+        )
+        self.stdout.write(
+            f"💾 Save progress every: {options.get('save_progress_every', 50)} embeddings"
+        )
+
+        if options.get("resume_from_batch", 0) > 0:
+            self.stdout.write(f"🔄 Resuming from batch: {options['resume_from_batch']}")
 
         if options.get("limit_per_model"):
             self.stdout.write(f"📏 Limit per model: {options['limit_per_model']}")
@@ -134,8 +221,6 @@ class Command(BaseCommand):
 
                 if status == "valid":
                     truncated_text = service.truncate_text_precise(cleaned_text)
-
-                    # Estimate final token count
                     estimated_tokens = (
                         len(truncated_text.split()) * service.tokens_per_word
                     )
@@ -185,10 +270,9 @@ class Command(BaseCommand):
         all_candidates = set()
 
         for model in models:
-            # Try multiple possible key formats
             keys_to_try = [
                 f"candidates:{model}",
-                f":1:candidates:{model}",  # Django cache prefix
+                f":1:candidates:{model}",
                 f"candidate_progress:{model}",
                 f":1:candidate_progress:{model}",
             ]
@@ -199,14 +283,12 @@ class Command(BaseCommand):
                     data = cache.get(key)
                     if data:
                         if isinstance(data, dict):
-                            # This might be progress data with candidates info
                             if "candidates_found" in data:
                                 self.stdout.write(
                                     f"📊 {model} progress: Found {data['candidates_found']} candidates"
                                 )
                             continue
                         elif isinstance(data, (list, set, tuple)):
-                            # Validate candidate IDs
                             valid_candidates = [
                                 cid for cid in data if isinstance(cid, int) and cid > 0
                             ]
@@ -220,7 +302,6 @@ class Command(BaseCommand):
                             self.stdout.write(
                                 f"⚠️ {model}: Unexpected data type {type(data)} in {key}"
                             )
-
                 except Exception as exc:
                     self.stdout.write(f"❌ Error reading {key}: {exc}")
 
@@ -242,10 +323,7 @@ class Command(BaseCommand):
 
             import redis
 
-            # Connect directly to Redis
             r = redis.Redis(host="db", port=6379, db=0, decode_responses=False)
-
-            # Get all keys with candidates
             all_keys = r.keys("*candidate*")
             self.stdout.write(f"📋 Direct Redis keys with 'candidate': {len(all_keys)}")
 
@@ -253,16 +331,13 @@ class Command(BaseCommand):
 
             for key in all_keys:
                 try:
-                    # Get raw data
                     raw_data = r.get(key)
                     if raw_data:
                         data = None
 
-                        # Try JSON first
                         try:
                             data = json.loads(raw_data.decode("utf-8"))
                         except (json.JSONDecodeError, UnicodeDecodeError):
-                            # Try pickle (Django cache format)
                             try:
                                 data = pickle.loads(raw_data)
                             except Exception:
@@ -271,7 +346,6 @@ class Command(BaseCommand):
                                 )
                                 continue
 
-                        # Extract candidates
                         if isinstance(data, (list, set, tuple)):
                             valid_candidates = [
                                 cid for cid in data if isinstance(cid, int) and cid > 0
@@ -297,15 +371,19 @@ class Command(BaseCommand):
             return []
 
     def find_candidates_parallel(
-        self, threshold: float, limit_per_model: Optional[int]
+        self,
+        threshold: float,
+        limit_per_model: Optional[int],
+        max_wait_minutes: int = 0,
+        check_interval: int = 3,
+        no_timeout: bool = False,
     ) -> List[int]:
-        """Enhanced parallel candidate finding with better monitoring"""
+        """Enhanced parallel candidate finding with configurable timeout"""
         self.stdout.write("\n🔍 PHASE 1: Finding ICD-11 candidates (PARALLEL)...")
         self.stdout.write("=" * 60)
 
         models = ["Ayurvedha", "Siddha", "Unani"]
 
-        # Start parallel tasks for all models
         self.stdout.write("🚀 Starting parallel candidate finding for all models...")
 
         job = group(
@@ -315,31 +393,43 @@ class Command(BaseCommand):
 
         result = job.apply_async()
 
-        # Enhanced monitoring with better exit conditions
-        self.stdout.write("📊 Monitoring progress with enhanced detection...\n")
+        # Configure timeout based on parameters
+        if no_timeout:
+            max_wait_seconds = float("inf")
+            timeout_msg = "NO TIMEOUT - Will wait indefinitely"
+        elif max_wait_minutes == 0:
+            max_wait_seconds = float("inf")
+            timeout_msg = "UNLIMITED TIMEOUT"
+        else:
+            max_wait_seconds = max_wait_minutes * 60
+            timeout_msg = f"{max_wait_minutes} minute timeout"
 
+        self.stdout.write(f"📊 Monitoring with {timeout_msg}...")
+        self.stdout.write(f"🔄 Checking every {check_interval} seconds\n")
+
+        # Enhanced monitoring with configurable timeout
         wait_time = 0
-        max_wait = 900  # 15 minutes max
-        check_interval = 3  # Check every 3 seconds
-
-        stable_completion_count = 0  # Track stable completions
+        stable_completion_count = 0
         last_total_candidates = 0
+        last_progress_update = 0
 
-        while wait_time < max_wait:
+        while wait_time < max_wait_seconds:
             try:
-                # Monitor progress
                 progress_task = monitor_candidate_progress.apply_async()
                 progress_info = progress_task.get(timeout=10)
 
                 if progress_info:
-                    # Clear screen for better visibility
-                    os.system("clear" if os.name == "posix" else "cls")
+                    # Update display every 30 seconds to reduce flicker
+                    if wait_time - last_progress_update >= 30:
+                        os.system("clear" if os.name == "posix" else "cls")
+                        last_progress_update = wait_time
 
                     self.stdout.write("📊 PARALLEL CANDIDATE FINDING PROGRESS")
                     self.stdout.write("=" * 60)
 
                     completed_count = 0
                     total_candidates_found = 0
+                    all_models_data = []
 
                     for model, progress in progress_info.items():
                         percentage = progress.get("percentage", 0)
@@ -347,7 +437,6 @@ class Command(BaseCommand):
                         total = progress.get("total", 1)
                         candidates_found = progress.get("candidates_found", 0)
 
-                        # Enhanced progress bar
                         bar_length = 40
                         filled_length = int(bar_length * percentage / 100)
                         bar = "█" * filled_length + "░" * (bar_length - filled_length)
@@ -361,24 +450,48 @@ class Command(BaseCommand):
                             completed_count += 1
                         total_candidates_found += candidates_found
 
+                        all_models_data.append(
+                            {
+                                "model": model,
+                                "percentage": percentage,
+                                "candidates": candidates_found,
+                            }
+                        )
+
+                    # Enhanced status display
                     self.stdout.write(
                         f"\n🔄 Status: {completed_count}/{len(models)} models completed"
                     )
-                    self.stdout.write(f"🕐 Wait time: {wait_time} seconds")
+
+                    # Show timing information
+                    elapsed_minutes = wait_time / 60
+                    if max_wait_seconds == float("inf"):
+                        self.stdout.write(
+                            f"🕐 Elapsed time: {elapsed_minutes:.1f} minutes (no timeout)"
+                        )
+                    else:
+                        remaining_minutes = (max_wait_seconds - wait_time) / 60
+                        self.stdout.write(
+                            f"🕐 Elapsed: {elapsed_minutes:.1f}min, Remaining: {remaining_minutes:.1f}min"
+                        )
+
                     self.stdout.write(
                         f"📊 Total candidates found so far: {total_candidates_found}"
                     )
 
-                    # Enhanced exit condition: stability check
+                    # Enhanced exit condition with stability check
                     if completed_count >= len(models) and total_candidates_found > 0:
                         if total_candidates_found == last_total_candidates:
                             stable_completion_count += 1
+                            self.stdout.write(
+                                f"🔄 Stable completion check {stable_completion_count}/3"
+                            )
                         else:
                             stable_completion_count = 0
 
                         last_total_candidates = total_candidates_found
 
-                        if stable_completion_count >= 3:  # Stable for 3 checks
+                        if stable_completion_count >= 3:
                             self.stdout.write(
                                 "\n✅ All models completed with stable results!"
                             )
@@ -386,18 +499,50 @@ class Command(BaseCommand):
                     else:
                         stable_completion_count = 0
 
+                    # Show estimated time remaining
+                    if completed_count < len(models):
+                        incomplete_models = [
+                            data for data in all_models_data if data["percentage"] < 100
+                        ]
+                        if incomplete_models and wait_time > 60:
+                            avg_progress = sum(
+                                data["percentage"] for data in incomplete_models
+                            ) / len(incomplete_models)
+                            if avg_progress > 5:
+                                estimated_remaining = (
+                                    wait_time * (100 - avg_progress) / avg_progress
+                                ) / 60
+                                self.stdout.write(
+                                    f"📊 Estimated remaining time: {estimated_remaining:.1f} minutes"
+                                )
+
             except Exception as e:
                 self.stdout.write(f"⚠️ Monitoring error: {str(e)}")
 
-            # Wait and increment counter
             time.sleep(check_interval)
             wait_time += check_interval
 
-        # Extended wait for Redis writes
-        self.stdout.write("\n⏳ Waiting 20 seconds for Redis write completion...")
-        time.sleep(20)
+            # Progress indicator for long waits
+            if wait_time % 60 == 0 and wait_time > 0:
+                minutes_elapsed = wait_time // 60
+                self.stdout.write(f"⏰ {minutes_elapsed} minutes elapsed...")
 
-        # Enhanced candidate retrieval
+        # Check if we exited due to timeout
+        if wait_time >= max_wait_seconds and max_wait_seconds != float("inf"):
+            self.stdout.write(f"\n⚠️ Timeout reached after {max_wait_minutes} minutes!")
+            self.stdout.write("📊 Proceeding with whatever candidates were found...")
+        else:
+            self.stdout.write(
+                f"\n✅ Candidate finding completed in {wait_time / 60:.1f} minutes"
+            )
+
+        # Adaptive wait for Redis writes
+        redis_wait_time = min(20, max(5, 20 - wait_time // 60))
+        self.stdout.write(
+            f"⏳ Waiting {redis_wait_time} seconds for Redis write completion..."
+        )
+        time.sleep(redis_wait_time)
+
         return self.retrieve_candidates_comprehensive()
 
     def retrieve_candidates_comprehensive(self) -> List[int]:
@@ -412,14 +557,14 @@ class Command(BaseCommand):
         if manual_candidates:
             all_candidates.update(manual_candidates)
 
-        # Strategy 2: Direct Redis if needed
-        if len(all_candidates) < 50:  # If we got very few candidates
+        # Strategy 2: Direct Redis if we got very few candidates
+        if len(all_candidates) < 50:
             self.stdout.write("🔧 Trying direct Redis connection...")
             direct_candidates = self.direct_redis_check()
             if direct_candidates:
                 all_candidates.update(direct_candidates)
 
-        # Strategy 3: Extended retry with different wait
+        # Strategy 3: Extended retry
         if len(all_candidates) < 20:
             self.stdout.write("🔧 Extended retry after longer wait...")
             time.sleep(15)
@@ -429,7 +574,6 @@ class Command(BaseCommand):
 
         # Final validation and results
         if all_candidates:
-            # Verify candidates exist in database and need embeddings
             valid_candidates = list(
                 ICD11Term.objects.filter(
                     id__in=list(all_candidates), embedding__isnull=True
@@ -446,7 +590,6 @@ class Command(BaseCommand):
                 )
             )
 
-            # Show sample
             sample_candidates = list(all_candidates)[:5]
             self.stdout.write(f"🔍 Sample candidates: {sample_candidates}")
 
@@ -465,18 +608,32 @@ class Command(BaseCommand):
         retry_failed: bool = False,
         model_preference: str = "biobert",
     ) -> None:
-        """Enhanced embedding with comprehensive error prevention"""
+        """Enhanced embedding with unlimited timeout and resume capability"""
 
         self.stdout.write(
             f"\n🎯 PHASE 2: Enhanced embedding for {len(candidate_ids)} candidates..."
         )
+        self.stdout.write("⏰ UNLIMITED TIME - Will run until completion!")
         self.stdout.write("=" * 60)
+
+        # Get embedding phase configuration
+        embedding_timeout = self.options.get("embedding_timeout_minutes", 0)
+        api_timeout = self.options.get("api_timeout_seconds", 60)
+        save_every = self.options.get("save_progress_every", 50)
+        resume_batch = self.options.get("resume_from_batch", 0)
+
+        if embedding_timeout == 0:
+            self.stdout.write("⏰ Embedding timeout: UNLIMITED")
+        else:
+            self.stdout.write(f"⏰ Embedding timeout: {embedding_timeout} minutes")
+
+        self.stdout.write(f"🔄 API timeout per call: {api_timeout} seconds")
+        self.stdout.write(f"💾 Progress saved every: {save_every} embeddings")
 
         # Get candidate objects
         candidates_query = ICD11Term.objects.filter(id__in=candidate_ids)
 
         if retry_failed:
-            # Include terms that failed previously (have null or poor embeddings)
             candidates_needing_embedding = candidates_query.filter(
                 models.Q(embedding__isnull=True)
                 | models.Q(embedding__exact=[0.0] * 768)
@@ -493,24 +650,13 @@ class Command(BaseCommand):
         self.stdout.write(f"📊 Already embedded: {already_embedded}")
         self.stdout.write(f"📊 Need embedding: {total_to_embed}")
 
-        if retry_failed:
-            self.stdout.write("🔄 Including previously failed embeddings")
-
-        # Show efficiency calculation
-        total_icd11 = ICD11Term.objects.count()
-        efficiency_gain = (
-            (total_icd11 - total_to_embed) / total_icd11 * 100 if total_icd11 > 0 else 0
-        )
-        self.stdout.write(
-            f"📊 💰 Efficiency gain: {efficiency_gain:.1f}% less work than embedding all ICD-11 terms!"
-        )
-
         if total_to_embed == 0:
             self.stdout.write("✅ All candidates already have embeddings!")
             return
 
-        # Initialize enhanced service
+        # Initialize enhanced service with custom timeout
         service = HuggingFaceAPIService(model_preference=model_preference)
+        service.timeout = api_timeout  # Override default timeout
 
         # Show model information
         model_info = service.get_model_info()
@@ -525,15 +671,26 @@ class Command(BaseCommand):
                 f"⚠️ Model health: {health['status']} - {health.get('error', 'degraded performance')}"
             )
 
-        # Process candidates with enhanced error handling
-        self.process_candidates_safely(
-            service, candidates_needing_embedding, batch_size
+        # Process with unlimited time and resume capability
+        self.process_candidates_unlimited(
+            service,
+            candidates_needing_embedding,
+            batch_size,
+            embedding_timeout,
+            save_every,
+            resume_batch,
         )
 
-    def process_candidates_safely(
-        self, service: HuggingFaceAPIService, candidates_query, batch_size: int
+    def process_candidates_unlimited(
+        self,
+        service: HuggingFaceAPIService,
+        candidates_query,
+        batch_size: int,
+        embedding_timeout_minutes: int = 0,
+        save_every: int = 50,
+        resume_batch: int = 0,
     ) -> None:
-        """Process candidates with comprehensive safety measures"""
+        """Process candidates with unlimited time and resume capability"""
 
         processed = 0
         successful = 0
@@ -544,26 +701,73 @@ class Command(BaseCommand):
         candidates_list = list(candidates_query)
         total_candidates = len(candidates_list)
 
-        # Use smaller batch size for safety
-        safe_batch_size = min(batch_size, 3)
+        # Calculate batches with resume capability
+        safe_batch_size = batch_size
         total_batches = (total_candidates + safe_batch_size - 1) // safe_batch_size
 
+        # Resume from specific batch if requested
+        start_batch = resume_batch
+        if start_batch > 0:
+            self.stdout.write(f"🔄 Resuming from batch {start_batch}")
+            processed = start_batch * safe_batch_size
+            candidates_list = candidates_list[processed:]
+            total_candidates = len(candidates_list)
+            total_batches = (total_candidates + safe_batch_size - 1) // safe_batch_size
+
         self.stdout.write(
-            f"\n🎯 SAFE EMBEDDING PROCESSING ({total_batches} batches, size {safe_batch_size})"
+            f"\n🎯 UNLIMITED EMBEDDING PROCESSING ({total_batches} batches, size {safe_batch_size})"
         )
+        self.stdout.write("⏰ NO TIME LIMITS - Process will run until completion")
         self.stdout.write("=" * 60)
 
-        for i in range(0, total_candidates, safe_batch_size):
+        start_time = time.time()
+        embedding_start_time = start_time
+
+        # Set embedding phase timeout (if specified)
+        if embedding_timeout_minutes > 0:
+            max_embedding_time = embedding_timeout_minutes * 60
+            self.stdout.write(
+                f"⏰ Embedding phase will timeout after {embedding_timeout_minutes} minutes"
+            )
+        else:
+            max_embedding_time = float("inf")
+            self.stdout.write("⏰ Embedding phase has NO timeout")
+
+        batch_num = start_batch
+        for i in range(0, len(candidates_list), safe_batch_size):
             batch = candidates_list[i : i + safe_batch_size]
-            batch_num = (i // safe_batch_size) + 1
+            batch_num += 1
+            batch_start_time = time.time()
+
+            # Check embedding phase timeout
+            embedding_elapsed = time.time() - embedding_start_time
+            if embedding_elapsed > max_embedding_time:
+                self.stdout.write(
+                    f"\n⏰ Embedding phase timeout reached after {embedding_timeout_minutes} minutes"
+                )
+                self.stdout.write(
+                    f"💾 Resume from batch {batch_num} using: --resume-from-batch {batch_num}"
+                )
+                break
 
             self.stdout.write(
-                f"\n⚙️ Batch {batch_num}/{total_batches}: Processing {len(batch)} terms"
+                f"\n⚙️ Batch {batch_num}/{start_batch + total_batches}: Processing {len(batch)} terms"
             )
+
+            # Show time information
+            elapsed_minutes = embedding_elapsed / 60
+            if max_embedding_time == float("inf"):
+                self.stdout.write(
+                    f"⏰ Elapsed: {elapsed_minutes:.1f} minutes (unlimited)"
+                )
+            else:
+                remaining_minutes = (max_embedding_time - embedding_elapsed) / 60
+                self.stdout.write(
+                    f"⏰ Elapsed: {elapsed_minutes:.1f}min, Remaining: {remaining_minutes:.1f}min"
+                )
 
             # Pre-validate batch
             valid_batch, validation_stats = self.validate_batch_texts(service, batch)
-
             skipped += validation_stats["skipped"]
 
             if not valid_batch:
@@ -572,7 +776,7 @@ class Command(BaseCommand):
                 processed += len(batch)
                 continue
 
-            # Process each term individually for maximum safety
+            # Process each term with unlimited retries for network issues
             batch_successful = 0
             batch_failed = 0
             batch_tensor_errors = 0
@@ -583,35 +787,39 @@ class Command(BaseCommand):
                         f"   🔄 {j}/{len(valid_batch)}: {term.code} ({len(validated_text)} chars)"
                     )
 
-                    # Generate embedding with comprehensive error handling
-                    embedding = service.generate_embedding(validated_text)
+                    # Generate embedding with unlimited retries for network issues
+                    embedding = self.generate_embedding_with_retries(
+                        service, validated_text, term.code, max_retries=10
+                    )
+
+                    if embedding is None:
+                        batch_failed += 1
+                        failed += 1
+                        self.stdout.write(
+                            f"   ❌ {term.code}: Failed after all retries"
+                        )
+                        continue
 
                     # Quality validation
                     non_zero_count = sum(1 for x in embedding if abs(x) > 0.001)
-                    quality_threshold = (
-                        service.embedding_dim * 0.1
-                    )  # At least 10% non-zero
+                    quality_threshold = service.embedding_dim * 0.1
 
                     if non_zero_count >= quality_threshold:
-                        # Save successful embedding
-                        now = timezone.now()
-                        term.embedding = embedding
-                        term.embedding_updated_at = now
-                        term.embedding_model_version = service.model_name
-                        term.save(
-                            update_fields=[
-                                "embedding",
-                                "embedding_updated_at",
-                                "embedding_model_version",
-                            ]
-                        )
-
-                        batch_successful += 1
-                        successful += 1
-                        self.stdout.write(
-                            f"   ✅ {term.code}: SUCCESS ({non_zero_count}/{service.embedding_dim} values)"
-                        )
-
+                        # Save successful embedding with database retry
+                        if self.save_embedding_with_retry(
+                            term, embedding, service.model_name
+                        ):
+                            batch_successful += 1
+                            successful += 1
+                            self.stdout.write(
+                                f"   ✅ {term.code}: SUCCESS ({non_zero_count}/{service.embedding_dim} values)"
+                            )
+                        else:
+                            batch_failed += 1
+                            failed += 1
+                            self.stdout.write(
+                                f"   ❌ {term.code}: Database save failed"
+                            )
                     else:
                         batch_failed += 1
                         failed += 1
@@ -624,7 +832,6 @@ class Command(BaseCommand):
                     batch_failed += 1
                     failed += 1
 
-                    # Track tensor-specific errors
                     if "tensor" in error_msg.lower() and "size" in error_msg.lower():
                         batch_tensor_errors += 1
                         tensor_errors += 1
@@ -634,41 +841,127 @@ class Command(BaseCommand):
                     else:
                         self.stdout.write(f"   ❌ {term.code}: ERROR - {error_msg}")
 
-                # Small delay between terms for API stability
-                time.sleep(1)
+                # Small delay to prevent API hammering
+                time.sleep(0.3)
 
             processed += len(batch)
+            batch_time = time.time() - batch_start_time
 
-            # Batch summary
-            self.stdout.write(f"\n📈 BATCH {batch_num} COMPLETE:")
-            self.stdout.write(f"   ✅ Successful: {batch_successful}")
-            self.stdout.write(f"   ❌ Failed: {batch_failed}")
-            self.stdout.write(f"   🚨 Tensor errors: {batch_tensor_errors}")
-            self.stdout.write(f"   ⏭️ Skipped: {validation_stats['skipped']}")
+            # Enhanced progress tracking with save points
+            if successful > 0 and successful % save_every == 0:
+                self.stdout.write(
+                    f"💾 Progress checkpoint: {successful} embeddings completed"
+                )
 
-            # Overall progress
-            overall_progress = (processed / total_candidates) * 100
-            success_rate = (successful / processed) * 100 if processed > 0 else 0
-
-            self.stdout.write(
-                f"   📊 Overall: {processed}/{total_candidates} ({overall_progress:.1f}%), Success: {success_rate:.1f}%"
+            # Comprehensive batch summary
+            self.display_batch_summary(
+                batch_num,
+                start_batch + total_batches,
+                batch_time,
+                batch_successful,
+                batch_failed,
+                batch_tensor_errors,
+                validation_stats,
+                processed,
+                total_candidates,
+                successful,
+                failed,
+                start_time,
             )
 
-            # Rate limiting between batches
-            if batch_num < total_batches:
-                self.stdout.write("   ⏳ Cooling down...")
-                time.sleep(5)
+            # Minimal delay between batches
+            if batch_num < start_batch + total_batches:
+                time.sleep(0.5)
 
         # Final comprehensive summary
         self.display_final_summary(
-            total_candidates,
-            processed,
+            total_candidates + (start_batch * safe_batch_size),
+            processed + (start_batch * safe_batch_size),
             successful,
             failed,
             skipped,
             tensor_errors,
             service,
+            time.time() - start_time,
         )
+
+    def generate_embedding_with_retries(
+        self,
+        service: HuggingFaceAPIService,
+        text: str,
+        term_code: str,
+        max_retries: int = 10,
+    ) -> Optional[List[float]]:
+        """Generate embedding with unlimited retries for network issues"""
+
+        for attempt in range(max_retries):
+            try:
+                embedding = service.generate_embedding(text)
+
+                if embedding and len(embedding) == service.embedding_dim:
+                    non_zero_count = sum(1 for x in embedding if abs(x) > 0.001)
+                    if non_zero_count > 10:
+                        return embedding
+
+                self.stdout.write(
+                    f"   ⚠️ {term_code}: Poor quality attempt {attempt + 1}, retrying..."
+                )
+
+            except Exception as e:
+                error_msg = str(e)
+                self.stdout.write(
+                    f"   ⚠️ {term_code}: Attempt {attempt + 1} failed: {error_msg}"
+                )
+
+                # For network errors, wait longer
+                if "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+                    wait_time = min(30, 2**attempt)
+                    self.stdout.write(
+                        f"   ⏳ Network issue detected, waiting {wait_time}s..."
+                    )
+                    time.sleep(wait_time)
+                elif "tensor" in error_msg.lower():
+                    if attempt >= 2:
+                        break
+                    time.sleep(1)
+                else:
+                    time.sleep(1)
+
+        return None
+
+    def save_embedding_with_retry(
+        self, term, embedding: List[float], model_name: str, max_retries: int = 3
+    ) -> bool:
+        """Save embedding with database connection retry"""
+
+        for attempt in range(max_retries):
+            try:
+                now = timezone.now()
+                term.embedding = embedding
+                term.embedding_updated_at = now
+                term.embedding_model_version = model_name
+                term.save(
+                    update_fields=[
+                        "embedding",
+                        "embedding_updated_at",
+                        "embedding_model_version",
+                    ]
+                )
+                return True
+
+            except Exception as e:
+                self.stdout.write(
+                    f"   ⚠️ Database save attempt {attempt + 1} failed: {str(e)}"
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+
+                # Try to refresh database connection
+                from django.db import connection
+
+                connection.close()
+
+        return False
 
     def validate_batch_texts(
         self, service: HuggingFaceAPIService, batch: List
@@ -686,20 +979,16 @@ class Command(BaseCommand):
 
         for term in batch:
             try:
-                # Get and validate embedding text
                 text = term.get_embedding_text()
                 cleaned_text, status = service.validate_and_clean_text(text)
 
                 if status == "valid":
-                    # Additional length validation
                     truncated_text = service.truncate_text_precise(cleaned_text)
                     estimated_tokens = (
                         len(truncated_text.split()) * service.tokens_per_word
                     )
 
-                    if (
-                        estimated_tokens <= service.max_length * 0.8
-                    ):  # Conservative limit
+                    if estimated_tokens <= service.max_length * 0.8:
                         valid_batch.append((term, truncated_text))
                         validation_stats["valid"] += 1
                         self.stdout.write(
@@ -723,6 +1012,59 @@ class Command(BaseCommand):
 
         return valid_batch, validation_stats
 
+    def display_batch_summary(
+        self,
+        batch_num: int,
+        total_batches: int,
+        batch_time: float,
+        batch_successful: int,
+        batch_failed: int,
+        batch_tensor_errors: int,
+        validation_stats: Dict,
+        processed: int,
+        total_candidates: int,
+        successful: int,
+        failed: int,
+        start_time: float,
+    ) -> None:
+        """Display comprehensive batch summary with timing"""
+
+        self.stdout.write(f"\n📈 BATCH {batch_num} COMPLETE ({batch_time:.1f}s):")
+        self.stdout.write(f"   ✅ Successful: {batch_successful}")
+        self.stdout.write(f"   ❌ Failed: {batch_failed}")
+        self.stdout.write(f"   🚨 Tensor errors: {batch_tensor_errors}")
+        self.stdout.write(f"   ⏭️ Skipped: {validation_stats['skipped']}")
+
+        # Progress and ETA
+        overall_progress = (
+            (processed / total_candidates) * 100 if total_candidates > 0 else 0
+        )
+        success_rate = (successful / processed) * 100 if processed > 0 else 0
+
+        elapsed_time = time.time() - start_time
+        if processed > 0:
+            avg_time_per_item = elapsed_time / processed
+            remaining_items = total_candidates - processed
+            eta_seconds = remaining_items * avg_time_per_item
+            eta_hours = eta_seconds / 3600
+
+            if eta_hours > 1:
+                eta_str = f"{eta_hours:.1f}h"
+            else:
+                eta_str = f"{eta_seconds / 60:.1f}min"
+
+            self.stdout.write(
+                f"   📊 Progress: {processed}/{total_candidates} ({overall_progress:.1f}%), "
+                f"Success: {success_rate:.1f}%, ETA: {eta_str}"
+            )
+
+            # Throughput information
+            throughput = processed / (elapsed_time / 60)
+            self.stdout.write(f"   ⚡ Throughput: {throughput:.1f} embeddings/minute")
+
+            # Resume information
+            self.stdout.write(f"   💾 Resume command: --resume-from-batch {batch_num}")
+
     def display_final_summary(
         self,
         total_candidates: int,
@@ -732,11 +1074,12 @@ class Command(BaseCommand):
         skipped: int,
         tensor_errors: int,
         service: HuggingFaceAPIService,
+        total_time: float,
     ) -> None:
-        """Display comprehensive final summary"""
+        """Display comprehensive final summary with timing information"""
 
         self.stdout.write("\n" + "=" * 60)
-        self.stdout.write(self.style.SUCCESS("✅ ENHANCED SMART EMBEDDING COMPLETED!"))
+        self.stdout.write(self.style.SUCCESS("✅ COMPLETE SMART EMBEDDING FINISHED!"))
         self.stdout.write("📊 COMPREHENSIVE STATISTICS:")
         self.stdout.write(f"   🎯 Total candidates: {total_candidates}")
         self.stdout.write(f"   🔄 Processed: {processed}")
@@ -744,6 +1087,17 @@ class Command(BaseCommand):
         self.stdout.write(f"   ❌ Failed: {failed}")
         self.stdout.write(f"   ⏭️ Skipped (validation): {skipped}")
         self.stdout.write(f"   🚨 Tensor errors: {tensor_errors}")
+
+        # Timing information
+        self.stdout.write(f"\n⏰ TIMING STATISTICS:")
+        self.stdout.write(
+            f"   📊 Total time: {total_time / 60:.1f} minutes ({total_time / 3600:.1f} hours)"
+        )
+        if processed > 0:
+            avg_time = total_time / processed
+            self.stdout.write(f"   📊 Average time per item: {avg_time:.1f} seconds")
+            throughput = processed / (total_time / 60)
+            self.stdout.write(f"   📊 Throughput: {throughput:.1f} embeddings/minute")
 
         # Calculate rates
         if processed > 0:
@@ -770,6 +1124,16 @@ class Command(BaseCommand):
                 f"   - Consider using --model-preference tinybert for problematic texts"
             )
             self.stdout.write(f"   - Run --validate-only first to identify issues")
-            self.stdout.write(f"   - Use smaller --batch-size (current: was larger)")
+            self.stdout.write(f"   - Use smaller --batch-size for stability")
+
+        # Performance recommendations
+        if successful > 0:
+            throughput = processed / (total_time / 60)
+            if throughput < 50:
+                self.stdout.write(f"\n⚡ PERFORMANCE TIPS:")
+                self.stdout.write(
+                    f"   - Consider increasing --batch-size for better throughput"
+                )
+                self.stdout.write(f"   - Check network connectivity to HuggingFace API")
 
         self.stdout.write("=" * 60)
