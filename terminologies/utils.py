@@ -1,4 +1,5 @@
 from django.contrib.postgres.search import SearchQuery, SearchRank, TrigramSimilarity
+from django.db import connection
 from django.db.models import F, FloatField, Q
 from django.db.models.functions import Greatest
 
@@ -184,3 +185,108 @@ def unified_fuzzy_search(query_text, systems=["all"], limit=20):
 
     # Sort by relevance across all systems
     return sorted(results, key=lambda x: x["relevance"], reverse=True)[:limit]
+
+
+# terminologies/utils.py
+# Smart candidate finding using fuzzy search
+
+
+def find_icd11_candidates(namaste_term, similarity_threshold=0.3, max_candidates=20):
+    """Find ICD-11 candidates using fuzzy search before embedding"""
+
+    search_text = namaste_term.get_embedding_text()
+    search_terms = search_text.lower().split()
+
+    # Build fuzzy search query
+    candidates = set()
+
+    for term in search_terms:
+        if len(term) >= 3:  # Skip very short terms
+            # Fuzzy search on title
+            title_matches = ICD11Term.objects.extra(
+                where=[f"similarity(title, %s) > {similarity_threshold}"], params=[term]
+            ).order_by("-id")[: max_candidates // 2]
+
+            # Fuzzy search on definition
+            def_matches = ICD11Term.objects.extra(
+                where=[f"similarity(definition, %s) > {similarity_threshold}"],
+                params=[term],
+            ).order_by("-id")[: max_candidates // 2]
+
+            # Add to candidates
+            candidates.update(title_matches)
+            candidates.update(def_matches)
+
+    # Also search index_terms JSON field
+    for term in search_terms:
+        if len(term) >= 3:
+            json_matches = ICD11Term.objects.extra(
+                where=[
+                    "EXISTS (SELECT 1 FROM jsonb_array_elements_text(index_terms) AS elem WHERE similarity(elem, %s) > %s)"
+                ],
+                params=[term, similarity_threshold],
+            )[: max_candidates // 3]
+
+            candidates.update(json_matches)
+
+    return list(candidates)[:max_candidates]
+
+
+def get_unique_icd11_candidates_for_all_namaste():
+    """Get unique set of ICD-11 terms that match any NAMASTE term WITH PROGRESS"""
+
+    from terminologies.models import Ayurvedha, Siddha, Unani
+
+    all_candidates = set()
+    processed_count = 0
+
+    print("🔍 Finding ICD-11 candidates using fuzzy search...")
+
+    # Process all NAMASTE systems
+    for Model in [Ayurvedha, Siddha, Unani]:
+        model_name = Model.__name__
+        namaste_terms = list(
+            Model.objects.exclude(embedding__isnull=True)
+        )  # Convert to list for progress
+        model_total = len(namaste_terms)
+
+        print(f"\n📋 Processing {model_name}: {model_total} terms")
+        print("-" * 50)
+
+        for i, term in enumerate(namaste_terms, 1):
+            # Show current term being processed
+            term_name = (
+                term.english_name[:40] if term.english_name else f"Term {term.pk}"
+            )
+            print(f"⚙️ {i:4}/{model_total:4}: {term_name}")
+
+            # Find candidates using your existing function
+            candidates = find_icd11_candidates(term, similarity_threshold=0.25)
+            new_candidates = set(candidates) - all_candidates
+            all_candidates.update(candidates)
+
+            # Show new matches found
+            if new_candidates:
+                print(f"   ✅ Found {len(new_candidates)} new matches")
+                # Show a few examples of new matches
+                for candidate in list(new_candidates)[:2]:  # Show first 2 new matches
+                    print(f"      → {candidate.title[:50]}")
+
+            processed_count += 1
+
+            # Show progress every 25 terms OR on first few terms
+            if i <= 5 or i % 25 == 0 or i == model_total:
+                model_progress = (i / model_total) * 100
+                total_candidates = len(all_candidates)
+                print(
+                    f"   📈 {model_name}: {i}/{model_total} ({model_progress:5.1f}%) | Total candidates: {total_candidates}"
+                )
+                print()  # Empty line for readability
+
+    print("=" * 60)
+    print(f"✅ CANDIDATE DISCOVERY COMPLETE!")
+    print(f"   Total NAMASTE terms processed: {processed_count}")
+    print(f"   Total unique ICD-11 candidates: {len(all_candidates)}")
+    print("=" * 60)
+
+    return list(all_candidates)
