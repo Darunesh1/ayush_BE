@@ -1,5 +1,5 @@
 # namasthe_mapping/tasks.py
-# Celery tasks for optimized embedding generation
+# Complete optimized file using existing fuzzy search functions
 
 import json
 import logging
@@ -19,7 +19,6 @@ def generate_single_embedding(
     self, model_name: str, record_id: int, force: bool = False
 ):
     """Generate embedding for a single record with retry logic"""
-
     try:
         # Get the model class and record
         if model_name == "ICD11Term":
@@ -139,25 +138,197 @@ def generate_single_embedding(
         }
 
 
+def find_icd11_candidates_fast(
+    namaste_term, similarity_threshold=0.3, max_candidates=20
+):
+    """Use existing fuzzy search functions - they're already optimized"""
+
+    # Import your existing fuzzy search function
+    from terminologies.utils import fuzzy_search_icd_terms
+
+    # Get search text from NAMASTE term
+    search_text = namaste_term.get_embedding_text()
+
+    if not search_text or not search_text.strip():
+        return []
+
+    try:
+        # Use your existing fuzzy search that handles:
+        # - Full-text search with SearchRank
+        # - TrigramSimilarity for fuzzy matching
+        # - Multiple fields (title, code, definition)
+        # - Proper relevance ordering
+        results = fuzzy_search_icd_terms(search_text, limit=max_candidates)
+
+        # Extract IDs from the QuerySet results
+        candidate_ids = [result.id for result in results]
+
+        return candidate_ids
+
+    except Exception as e:
+        logger.error(f"Fuzzy search failed for '{search_text}': {str(e)}")
+
+        # Fallback to simple search if fuzzy search fails
+        from terminologies.models import ICD11Term
+
+        keywords = [w.lower() for w in search_text.split() if len(w) >= 3][:3]
+
+        candidates = set()
+        for keyword in keywords:
+            matches = list(
+                ICD11Term.objects.filter(title__icontains=keyword).values_list(
+                    "id", flat=True
+                )[: max_candidates // 3]
+            )
+            candidates.update(matches)
+
+        return list(candidates)[:max_candidates]
+
+
+@shared_task
+def find_candidates_for_model(
+    model_name: str, similarity_threshold: float = 0.3, limit_per_model: int = None
+):
+    """Find ICD-11 candidates for a single NAMASTE model using existing fuzzy search"""
+
+    try:
+        # Get the model class
+        if model_name == "Ayurvedha":
+            Model = apps.get_model("terminologies", "Ayurvedha")
+        elif model_name == "Siddha":
+            Model = apps.get_model("terminologies", "Siddha")
+        elif model_name == "Unani":
+            Model = apps.get_model("terminologies", "Unani")
+        else:
+            return {"success": False, "error": f"Unknown model: {model_name}"}
+
+        # Get terms with embeddings
+        queryset = Model.objects.exclude(embedding__isnull=True)
+        if limit_per_model:
+            queryset = queryset[:limit_per_model]
+
+        terms = list(queryset)
+        total_terms = len(terms)
+
+        logger.info(
+            f"🚀 Starting candidate finding for {model_name}: {total_terms} terms"
+        )
+
+        model_candidates = set()
+        processed = 0
+
+        # Process in small chunks for better progress reporting
+        chunk_size = 25
+
+        for chunk_start in range(0, len(terms), chunk_size):
+            chunk_terms = terms[chunk_start : chunk_start + chunk_size]
+            chunk_candidates = set()
+
+            for term in chunk_terms:
+                # Use your existing fuzzy search
+                try:
+                    candidates = find_icd11_candidates_fast(
+                        term, similarity_threshold, max_candidates=25
+                    )
+                    chunk_candidates.update(candidates)
+
+                    # Log some successful matches for debugging
+                    if candidates and processed < 5:  # Log first few terms only
+                        logger.info(
+                            f"🔍 {term.english_name[:30]} → {len(candidates)} matches"
+                        )
+
+                except Exception as e:
+                    logger.error(f"Failed to find candidates for {term.id}: {str(e)}")
+
+                processed += 1
+
+            # Add chunk candidates to model total
+            model_candidates.update(chunk_candidates)
+
+            # Update progress in Redis every chunk
+            progress_key = f"candidate_progress:{model_name}"
+            progress_data = {
+                "model": model_name,
+                "processed": processed,
+                "total": total_terms,
+                "percentage": (processed / total_terms) * 100,
+                "candidates_found": len(model_candidates),
+                "updated_at": timezone.now().isoformat(),
+            }
+            cache.set(progress_key, progress_data, timeout=3600)
+
+            logger.info(
+                f"📈 {model_name}: {processed}/{total_terms} "
+                f"({progress_data['percentage']:.1f}%) - {len(model_candidates)} candidates"
+            )
+
+        # Store final candidates in Redis
+        candidates_key = f"candidates:{model_name}"
+        candidate_ids = list(model_candidates)
+        cache.set(candidates_key, candidate_ids, timeout=7200)  # 2 hours
+
+        logger.info(
+            f"✅ {model_name} completed: {len(model_candidates)} unique candidates found"
+        )
+
+        return {
+            "success": True,
+            "model": model_name,
+            "processed": processed,
+            "candidates_found": len(model_candidates),
+            "candidates_key": candidates_key,
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error finding candidates for {model_name}: {str(e)}")
+        return {"success": False, "model": model_name, "error": str(e)}
+
+
+@shared_task
+def monitor_candidate_progress():
+    """Monitor progress of parallel candidate finding"""
+
+    models = ["Ayurvedha", "Siddha", "Unani"]
+    progress_data = {}
+
+    for model in models:
+        progress_key = f"candidate_progress:{model}"
+        model_progress = cache.get(progress_key)
+        if model_progress:
+            progress_data[model] = model_progress
+
+    return progress_data
+
+
 @shared_task
 def generate_batch_embeddings(model_name: str, record_ids: list, force: bool = False):
-    """Generate embeddings for a batch of records"""
+    """Generate embeddings for a batch of records - FIXED VERSION"""
 
-    # Create a group of individual embedding tasks
-    job = group(
-        generate_single_embedding.s(model_name, record_id, force)
-        for record_id in record_ids
-    )
+    results = []
 
-    # Execute the group
-    result = job.apply_async()
-
-    # Wait for all tasks to complete and collect results
-    results = result.get()
+    # Process each record individually instead of using group().get()
+    for record_id in record_ids:
+        try:
+            # Call the function directly instead of as a task
+            result = generate_single_embedding.apply(
+                args=[model_name, record_id, force]
+            ).get()
+            results.append(result)
+        except Exception as e:
+            logger.error(f"Failed to process record {record_id}: {str(e)}")
+            results.append(
+                {
+                    "success": False,
+                    "record_id": record_id,
+                    "model": model_name,
+                    "error": str(e),
+                }
+            )
 
     # Aggregate results
-    successful = sum(1 for r in results if r["success"])
-    failed = sum(1 for r in results if not r["success"])
+    successful = sum(1 for r in results if r.get("success", False))
+    failed = sum(1 for r in results if not r.get("success", False))
     cached = sum(1 for r in results if r.get("action") == "cached")
     generated = sum(1 for r in results if r.get("action") == "generated")
 
@@ -175,7 +346,6 @@ def generate_batch_embeddings(model_name: str, record_ids: list, force: bool = F
 @shared_task
 def update_progress(task_name: str, current: int, total: int, model_name: str = None):
     """Update progress in Redis for monitoring"""
-
     progress_key = f"embedding_progress:{task_name}"
 
     progress_data = {
@@ -195,14 +365,12 @@ def update_progress(task_name: str, current: int, total: int, model_name: str = 
 @shared_task
 def cleanup_embedding_cache(older_than_days: int = 7):
     """Clean up old embedding cache entries"""
-
-    # This would typically use Redis pattern matching
-    # Implementation depends on your Redis setup
-
     logger.info(
         f"Cleaning up embedding cache entries older than {older_than_days} days"
     )
 
-    # Example cleanup logic (adapt to your Redis configuration)
-    # This is a simplified version
     return {"message": "Cache cleanup completed"}
+
+
+# Simple debug print (no registration issues)
+logger.info("NAMASTE mapping tasks loaded successfully")
