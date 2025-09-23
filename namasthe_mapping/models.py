@@ -206,7 +206,7 @@ class ConceptMapping(models.Model):
         ("imported", "Imported from External Source"),
     ]
     mapping_method = models.CharField(
-        max_length=20, choices=METHOD_CHOICES, default="onnx_biobert"
+        max_length=50, choices=METHOD_CHOICES, default="onnx_biobert"
     )
 
     # Flags for mapping quality
