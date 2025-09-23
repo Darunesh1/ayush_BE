@@ -1,16 +1,16 @@
 # config/celery.py
-# Simple, clean Celery configuration
 
 import os
 
 from celery import Celery
 
+# Make sure this matches your actual settings path
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
 app = Celery("ayushsync")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 
-# Auto-discover tasks from all Django apps
+# This will automatically find tasks.py files in all Django apps
 app.autodiscover_tasks()
 
 
