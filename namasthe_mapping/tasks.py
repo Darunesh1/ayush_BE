@@ -1,6 +1,5 @@
 # namasthe_mapping/tasks.py
-# COMPLETELY OPTIMIZED for on-demand execution with minimal resource usage
-# Designed to prevent laptop crashes and memory issues
+# CORRECTED VERSION - Fixed Celery task nesting issue
 
 import gc
 import json
@@ -59,9 +58,10 @@ def create_concept_mappings_batch(
     # Enforce batch size limits to prevent crashes
     if len(source_term_ids) > MAX_BATCH_SIZE:
         logger.warning(
-            f"Large batch ({len(source_term_ids)}) detected, chunking into {CHUNK_SIZE}-term pieces"
+            f"Large batch ({len(source_term_ids)}) detected, processing directly to avoid task nesting"
         )
-        return _process_large_batch_in_chunks(
+        # Process directly instead of calling subtasks to avoid Celery deadlock
+        return _process_large_batch_directly(
             self,
             mapping_config_id,
             source_term_ids,
@@ -186,7 +186,7 @@ def create_concept_mappings_batch(
                         target_embedding=icd11_term["embedding"]
                         if match["similarity"] >= 0.85
                         else None,
-                        mapping_method="dmis-lab/biobert-v1.1",
+                        mapping_method="biobert",  # Fixed: shortened method name
                         is_high_confidence=(match["similarity"] >= 0.9),
                         needs_review=(match["similarity"] < 0.85),
                     )
@@ -262,7 +262,7 @@ def create_concept_mappings_batch(
 # ========== HELPER FUNCTIONS ==========
 
 
-def _process_large_batch_in_chunks(
+def _process_large_batch_directly(
     task_instance,
     mapping_config_id: str,
     source_term_ids: List[int],
@@ -270,14 +270,16 @@ def _process_large_batch_in_chunks(
     max_mappings: int,
     similarity_threshold: float,
 ) -> Dict[str, Any]:
-    """Process large batches in memory-safe chunks"""
+    """
+    FIXED: Process large batches directly within the same task to avoid Celery nesting
+    """
 
     total_mappings = 0
     total_processed = 0
     total_chunks = (len(source_term_ids) + CHUNK_SIZE - 1) // CHUNK_SIZE
 
     logger.info(
-        f"🔄 Chunking {len(source_term_ids)} terms into {total_chunks} chunks of {CHUNK_SIZE}"
+        f"🔄 Processing {len(source_term_ids)} terms in {total_chunks} chunks of {CHUNK_SIZE} (DIRECT)"
     )
 
     for i in range(0, len(source_term_ids), CHUNK_SIZE):
@@ -285,20 +287,19 @@ def _process_large_batch_in_chunks(
         chunk_num = i // CHUNK_SIZE + 1
 
         logger.info(
-            f"📦 Processing chunk {chunk_num}/{total_chunks} ({len(chunk)} terms)"
+            f"📦 Processing chunk {chunk_num}/{total_chunks} ({len(chunk)} terms) DIRECTLY"
         )
 
         try:
-            # Process chunk synchronously to maintain memory control
-            chunk_result = create_concept_mappings_batch.apply(
-                args=[
-                    mapping_config_id,
-                    chunk,
-                    system,
-                    max_mappings,
-                    similarity_threshold,
-                ]
-            ).get(timeout=900)  # 15 minute timeout per chunk
+            # Process chunk directly instead of creating subtasks
+            chunk_result = _process_single_chunk(
+                task_instance,
+                mapping_config_id,
+                chunk,
+                system,
+                max_mappings,
+                similarity_threshold,
+            )
 
             total_mappings += chunk_result.get("mappings_created", 0)
             total_processed += chunk_result.get("source_terms_processed", 0)
@@ -308,7 +309,7 @@ def _process_large_batch_in_chunks(
             )
 
             # Pause between chunks to prevent system overload
-            time.sleep(3)
+            time.sleep(2)
 
             # Force cleanup between chunks
             gc.collect()
@@ -322,6 +323,112 @@ def _process_large_batch_in_chunks(
         "chunks_processed": total_chunks,
         "chunked_processing": True,
     }
+
+
+def _process_single_chunk(
+    task_instance,
+    mapping_config_id: str,
+    source_term_ids: List[int],
+    system: str,
+    max_mappings: int,
+    similarity_threshold: float,
+) -> Dict[str, Any]:
+    """Process a single chunk of terms directly"""
+
+    try:
+        # Import Django models
+        from django.contrib.contenttypes.models import ContentType
+
+        from namasthe_mapping.models import ConceptMapping, TerminologyMapping
+        from namasthe_mapping.services import HuggingFaceAPIService
+        from terminologies.models import Ayurvedha, ICD11Term, Siddha, Unani
+
+        # Get mapping config
+        mapping_config = TerminologyMapping.objects.get(id=mapping_config_id)
+
+        # Model mapping
+        model_map = {"ayurveda": Ayurvedha, "siddha": Siddha, "unani": Unani}
+        SourceModel = model_map[system]
+        source_content_type = ContentType.objects.get_for_model(SourceModel)
+
+        # Load source terms for this chunk
+        source_terms = list(
+            SourceModel.objects.filter(
+                id__in=source_term_ids, embedding__isnull=False
+            ).only("id", "embedding")
+        )
+
+        if not source_terms:
+            return {"mappings_created": 0, "source_terms_processed": 0}
+
+        # Get ICD-11 terms (cached)
+        icd11_terms = _get_limited_icd11_terms(system)
+        if not icd11_terms:
+            return {"mappings_created": 0, "source_terms_processed": 0}
+
+        # Initialize service
+        service = HuggingFaceAPIService(model_preference="biobert")
+        icd11_embeddings = [term["embedding"] for term in icd11_terms]
+
+        # Process mappings
+        mappings_to_create = []
+        processed_count = 0
+
+        for source_term in source_terms:
+            try:
+                if not _validate_embedding(source_term.embedding):
+                    continue
+
+                matches = service.find_best_matches(
+                    source_term.embedding,
+                    icd11_embeddings,
+                    similarity_threshold=similarity_threshold,
+                    top_k=max_mappings,
+                )
+
+                for match in matches:
+                    icd11_term = icd11_terms[match["index"]]
+
+                    mapping = ConceptMapping(
+                        mapping=mapping_config,
+                        source_content_type=source_content_type,
+                        source_object_id=source_term.id,
+                        target_concept_id=icd11_term["id"],
+                        relationship=_determine_relationship(match["similarity"]),
+                        similarity_score=match["similarity"],
+                        confidence_score=min(match["similarity"] + 0.05, 1.0),
+                        source_embedding=source_term.embedding
+                        if match["similarity"] >= 0.85
+                        else None,
+                        target_embedding=icd11_term["embedding"]
+                        if match["similarity"] >= 0.85
+                        else None,
+                        mapping_method="biobert",
+                        is_high_confidence=(match["similarity"] >= 0.9),
+                        needs_review=(match["similarity"] < 0.85),
+                    )
+                    mappings_to_create.append(mapping)
+
+                processed_count += 1
+
+            except Exception as e:
+                logger.error(f"Error processing term {source_term.id}: {str(e)}")
+
+        # Save mappings
+        mappings_created = _save_mappings_in_batches(mappings_to_create)
+
+        # Cleanup
+        del icd11_embeddings, source_terms, mappings_to_create
+        gc.collect()
+
+        return {
+            "mappings_created": mappings_created,
+            "source_terms_processed": processed_count,
+        }
+
+    except Exception as e:
+        logger.error(f"Chunk processing failed: {str(e)}")
+        return {"mappings_created": 0, "source_terms_processed": 0}
 
 
 def _get_limited_icd11_terms(system: str) -> List[Dict[str, Any]]:
