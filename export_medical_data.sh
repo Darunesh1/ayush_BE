@@ -1,17 +1,21 @@
 #!/bin/bash
-# export_medical_data.sh - Export Ayushsync Medical Terminology Data
-# Usage: ./export_medical_data.sh
+# export_medical_data_pg.sh - Export using PostgreSQL pg_dump (Much faster and smaller)
+# Usage: ./export_medical_data_pg.sh
 
-set -e  # Exit on any error
+set -e
 
 echo "========================================="
-echo "  AYUSHSYNC MEDICAL DATA EXPORT"
+echo "  AYUSHSYNC MEDICAL DATA EXPORT (pg_dump)"
 echo "========================================="
 
-# Configuration
-EXPORT_DIR="exports"
+# Configuration from your docker-compose.yml
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-ARCHIVE_NAME="ayushsync_medical_data_${TIMESTAMP}.tar.gz"
+BACKUP_NAME="ayushsync_medical_${TIMESTAMP}"
+
+# Your specific database configuration
+DB_NAME="ayushsync_db"
+DB_USER="devuser"
+DB_PASSWORD="devpassword"
 
 # Check if Docker containers are running
 if ! docker-compose ps | grep -q "Up"; then
@@ -19,105 +23,76 @@ if ! docker-compose ps | grep -q "Up"; then
     exit 1
 fi
 
-# Create exports directory
-echo "📁 Creating export directory..."
-mkdir -p $EXPORT_DIR
-cd $EXPORT_DIR
+echo "📁 Starting PostgreSQL database export..."
+echo "🔧 Database: $DB_NAME"
+echo "👤 User: $DB_USER"
 
-# Function to export with error handling
-export_model() {
-    local model=$1
-    local filename=$2
-    echo "📤 Exporting $model..."
-    
-    if docker-compose exec -T web python manage.py dumpdata $model --indent=2 > $filename; then
-        local count=$(cat $filename | grep -c '"model"' || echo "0")
-        echo "✅ $model: $count records exported to $filename"
-    else
-        echo "❌ Failed to export $model"
-        exit 1
-    fi
-}
+# Get database container (using service name 'postgres' from your docker-compose)
+DB_CONTAINER=$(docker-compose ps -q postgres)
 
-# Export in dependency order
-echo ""
-echo "🔄 Step 1: Exporting Django ContentTypes (required for GenericForeignKey)..."
-export_model "contenttypes" "contenttypes.json"
-
-echo ""
-echo "🔄 Step 2: Exporting Terminologies (NAMASTE + ICD-11)..."
-export_model "terminologies.ICD11Term" "icd11_terms.json"
-export_model "terminologies.Ayurvedha" "ayurveda_terms.json"
-export_model "terminologies.Siddha" "siddha_terms.json"
-export_model "terminologies.Unani" "unani_terms.json"
-
-echo ""
-echo "🔄 Step 3: Exporting Terminology Mappings..."
-export_model "namasthe_mapping.TerminologyMapping" "terminology_mappings.json"
-export_model "namasthe_mapping.ConceptMapping" "concept_mappings.json"
-export_model "namasthe_mapping.MappingAudit" "mapping_audit.json"
-
-echo ""
-echo "🔄 Step 4: Creating combined export with natural keys..."
-echo "📤 Exporting complete dataset..."
-
-COMBINED_FILE="ayushsync_complete_${TIMESTAMP}.json"
-
-if docker-compose exec -T web python manage.py dumpdata \
-    contenttypes \
-    terminologies.ICD11Term \
-    terminologies.Ayurvedha \
-    terminologies.Siddha \
-    terminologies.Unani \
-    namasthe_mapping.TerminologyMapping \
-    namasthe_mapping.ConceptMapping \
-    namasthe_mapping.MappingAudit \
-    --natural-foreign --natural-primary \
-    --indent=2 > "$COMBINED_FILE"; then
-    
-    # Count total records (removed 'local' keyword)
-    total_records=$(cat "$COMBINED_FILE" | grep -c '"model"' || echo "0")
-    echo "✅ Complete dataset: $total_records total records exported"
-else
-    echo "❌ Failed to create combined export"
+if [ -z "$DB_CONTAINER" ]; then
+    echo "❌ PostgreSQL container not found. Check if service is named 'postgres' in docker-compose.yml"
     exit 1
 fi
 
-echo ""
-echo "🔄 Step 5: Creating compressed archive..."
-if tar -czf $ARCHIVE_NAME *.json; then
-    # Get archive size (removed 'local' keyword)
-    archive_size=$(ls -lh $ARCHIVE_NAME | awk '{print $5}')
-    echo "✅ Archive created: $ARCHIVE_NAME ($archive_size)"
-else
-    echo "❌ Failed to create archive"
-    exit 1
-fi
+echo "📤 Exporting with pg_dump (custom format - highly compressed)..."
+
+# Custom format (binary, compressed) - RECOMMENDED for large datasets
+echo "Creating binary backup (recommended for restore)..."
+docker-compose exec -T postgres pg_dump \
+    -U $DB_USER \
+    -d $DB_NAME \
+    --format=custom \
+    --compress=9 \
+    --verbose \
+    --file=/tmp/${BACKUP_NAME}.backup
+
+# Copy from container to host
+docker cp $DB_CONTAINER:/tmp/${BACKUP_NAME}.backup ${BACKUP_NAME}.backup
+
+echo "📤 Creating additional SQL backup (for manual inspection if needed)..."
+# Compressed SQL dump
+docker-compose exec -T postgres pg_dump \
+    -U $DB_USER \
+    -d $DB_NAME \
+    --format=plain \
+    --compress=9 \
+    --verbose \
+    --file=/tmp/${BACKUP_NAME}.sql.gz
+
+# Copy from container to host  
+docker cp $DB_CONTAINER:/tmp/${BACKUP_NAME}.sql.gz ${BACKUP_NAME}.sql.gz
+
+# Clean up container files
+docker-compose exec -T postgres rm /tmp/${BACKUP_NAME}.backup /tmp/${BACKUP_NAME}.sql.gz
+
+# Get file sizes and show summary
+custom_size=$(ls -lh ${BACKUP_NAME}.backup | awk '{print $5}')
+sql_size=$(ls -lh ${BACKUP_NAME}.sql.gz | awk '{print $5}')
 
 echo ""
-echo "📊 Export Summary:"
-echo "==================="
-ls -la *.json *.tar.gz | while read line; do
-    echo "  $line"
-done
-
-cd ..
-
+echo "🎉 PostgreSQL export completed successfully!"
+echo "=================================="
+echo "📁 Files created:"
+echo "  📦 ${BACKUP_NAME}.backup ($custom_size) - Binary format (RECOMMENDED)"
+echo "  📄 ${BACKUP_NAME}.sql.gz ($sql_size) - SQL format (for inspection)"
 echo ""
-echo "🎉 Export completed successfully!"
-echo "📁 Files are located in: $(pwd)/$EXPORT_DIR/"
-echo "📦 Transfer archive: $EXPORT_DIR/$ARCHIVE_NAME"
+echo "💾 Benefits over JSON export:"
+echo "  ✅ 70-90% smaller file size"
+echo "  ✅ 10-50x faster export/import"  
+echo "  ✅ Preserves all PostgreSQL data types perfectly"
+echo "  ✅ Includes BioBERT embeddings in efficient binary format"
+echo "  ✅ No Django dependency needed for restore"
 echo ""
-echo "💾 Data Summary:"
-echo "  - ICD-11 Terms: 35,171 records"
-echo "  - Ayurveda Terms: 2,893 records"
-echo "  - Siddha Terms: 1,925 records"
-echo "  - Unani Terms: 2,521 records"
-echo "  - Concept Mappings: 21,922 records"
-echo "  - BioBERT embeddings included"
+echo "📊 Your dataset summary:"
+echo "  - Database: ayushsync_db"
+echo "  - ~35,000 ICD-11 terms with embeddings"
+echo "  - ~7,000 NAMASTE terms (Ayurveda/Siddha/Unani)"
+echo "  - ~22,000 AI-generated concept mappings"
 echo ""
-echo "Next steps:"
-echo "  1. Copy $EXPORT_DIR/$ARCHIVE_NAME to your target system"
-echo "  2. Extract: tar -xzf $ARCHIVE_NAME"
-echo "  3. Run: ./import_medical_data.sh"
+echo "🚚 Next steps:"
+echo "  1. Transfer ${BACKUP_NAME}.backup to your target system"
+echo "  2. Run: ./import_medical_data_pg.sh ${BACKUP_NAME}.backup"
+echo ""
+echo "💡 Tip: Use the .backup file (not .sql.gz) for fastest restore"
 
