@@ -1,0 +1,5 @@
+uv run manage.py load_ayurveda --file=data/ayurveda_morbidity_codes_all.xlsx
+uv run manage.py load_siddha --file=data/siddha_morbidity_codes_all.xlsx
+uv run manage.py load_unani --file=data/unani_morbidity_codes_all.xlsx
+uv run manage.py load_icd11 --file=data/ICD_11_all.csv
+uv run manage.py create_namaste_mappings --system=all --threshold=0.4
