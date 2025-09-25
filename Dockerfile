@@ -33,6 +33,6 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENTRYPOINT []
 
 # Run the django application using uv + uvicorn
-CMD ["uv", "run", "uvicorn", "config.asgi:application", "--reload", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "config.asgi:application",  "--host", "0.0.0.0", "--port", "8000"]
 
 
