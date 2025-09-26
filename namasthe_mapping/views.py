@@ -32,7 +32,7 @@ from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 
 # Local imports
-from terminologies.models import Ayurvedha, Siddha, Unani
+from terminologies.models import Ayurvedha, ICD11Term, Siddha, Unani
 
 from .models import ConceptMapping, MappingAudit, TerminologyMapping
 from .serializers import (
@@ -40,6 +40,8 @@ from .serializers import (
     ConceptDetailResponseSerializer,
     ConceptMappingDetailSerializer,
     ErrorResponseSerializer,
+    ICD11ConceptDetailSerializer,
+    ICD11DetailResponseSerializer,
     ICD11SearchResponseSerializer,
     ManualMappingCreateSerializer,
     MappingCreateResponseSerializer,
@@ -864,6 +866,207 @@ def get_unani_concept_detail(request, concept_id):
             {
                 "error": "Internal server error",
                 "message": "Failed to retrieve Unani concept details",
+                "code": "INTERNAL_ERROR",
+                "debug_info": str(e) if settings.DEBUG else None,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+# =============================================================================
+# ICD-11 CONCEPT DETAIL VIEW WITH ALL RELATED NAMASTE FIELDS
+# =============================================================================
+
+
+@extend_schema(
+    summary="Get ICD-11 Concept Details with Related NAMASTE Fields",
+    description="""
+    Retrieve detailed information for an ICD-11 concept with all related NAMASTE concepts.
+    
+    **Features:**
+    - Complete ICD-11 concept details (code, title, definition, hierarchy)
+    - All related Ayurveda concepts with mapping confidence scores
+    - All related Siddha concepts with mapping confidence scores  
+    - All related Unani concepts with mapping confidence scores
+    - Comprehensive mapping statistics across all NAMASTE systems
+    - Returns null for systems with no mappings
+    - TinyBioBERT confidence scores and validation status
+    """,
+    parameters=[
+        OpenApiParameter(
+            name="concept_id",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.PATH,
+            description="Primary key ID of the ICD-11 concept",
+            required=True,
+            examples=[
+                OpenApiExample("Small ID", value=123),
+                OpenApiExample("Large ID", value=456789),
+                OpenApiExample("Single digit", value=7),
+            ],
+        ),
+        OpenApiParameter(
+            name="min_confidence",
+            type=OpenApiTypes.FLOAT,
+            location=OpenApiParameter.QUERY,
+            description="Filter related concepts by minimum confidence score (0.0-1.0)",
+            required=False,
+            examples=[
+                OpenApiExample("Low confidence", value=0.5),
+                OpenApiExample("Medium confidence", value=0.75),
+                OpenApiExample("High confidence", value=0.85),
+            ],
+        ),
+        OpenApiParameter(
+            name="validated_only",
+            type=OpenApiTypes.BOOL,
+            location=OpenApiParameter.QUERY,
+            description="Show only expert-validated mappings",
+            required=False,
+            examples=[
+                OpenApiExample("Show all mappings", value=False),
+                OpenApiExample("Only validated mappings", value=True),
+            ],
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(
+            response=ICD11DetailResponseSerializer,
+            description="Successful retrieval of ICD-11 concept with all related NAMASTE concepts",
+            examples=[
+                OpenApiExample(
+                    "Complete ICD-11 concept response",
+                    value={
+                        "concept": {
+                            "id": 123,
+                            "code": "M54.3",
+                            "title": "Sciatica",
+                            "definition": "Pain affecting the sciatic nerve",
+                            "chapter": "13 - Diseases of the musculoskeletal system",
+                            "related_ayurveda": [
+                                {
+                                    "concept": {
+                                        "id": 456,
+                                        "code": "AY-GRIDHRASI-001",
+                                        "english_name": "Gridhrasi",
+                                        "hindi_name": "गृध्रसी",
+                                        "diacritical_name": "Gridhrasi",
+                                    },
+                                    "mapping": {
+                                        "confidence_score": 0.95,
+                                        "relationship": "equivalent-to",
+                                        "is_validated": True,
+                                    },
+                                }
+                            ],
+                            "related_siddha": None,
+                            "related_unani": [
+                                {
+                                    "concept": {
+                                        "id": 789,
+                                        "code": "UN-IRQ-001",
+                                        "english_name": "Irq-un-nisa",
+                                        "arabic_name": "عرق النسا",
+                                    },
+                                    "mapping": {
+                                        "confidence_score": 0.88,
+                                        "relationship": "equivalent-to",
+                                    },
+                                }
+                            ],
+                        }
+                    },
+                )
+            ],
+        ),
+        400: OpenApiResponse(
+            response=ErrorResponseSerializer,
+            description="Bad request - invalid concept ID or parameters",
+        ),
+        404: OpenApiResponse(
+            response=ErrorResponseSerializer, description="ICD-11 concept not found"
+        ),
+        500: OpenApiResponse(
+            response=ErrorResponseSerializer, description="Internal server error"
+        ),
+    },
+    tags=["ICD-11 Concepts"],
+    operation_id="getICD11ConceptDetail",
+)
+@api_view(["GET"])
+@renderer_classes([JSONRenderer])
+@cache_page(60 * 10)  # 10-minute cache
+def get_icd11_concept_detail(request, concept_id):
+    """
+    Get detailed information for an ICD-11 concept with all related NAMASTE concepts
+    URL: /namasthe_mapping/icd11/{concept_id}/detail/
+    """
+
+    try:
+        # Validate concept_id
+        try:
+            concept_id = int(concept_id)
+        except (ValueError, TypeError):
+            return Response(
+                {
+                    "error": "Invalid concept ID",
+                    "message": "Concept ID must be a valid integer",
+                    "code": "INVALID_CONCEPT_ID",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Get ICD-11 concept (assuming you have an ICD11Concept model)
+        try:
+            icd11_concept = ICD11Term.objects.get(pk=concept_id)
+        except ICD11Term.DoesNotExist:
+            return Response(
+                {
+                    "error": "Concept not found",
+                    "message": f"ICD-11 concept with ID {concept_id} not found",
+                    "code": "CONCEPT_NOT_FOUND",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Parse filters for related concepts
+        filters = {
+            "min_confidence": request.GET.get("min_confidence"),
+            "validated_only": request.GET.get("validated_only", "").lower() == "true",
+        }
+
+        # Apply filters to the serializer context
+        serializer_context = {
+            "request": request,
+            "filters": filters,
+        }
+
+        # Serialize ICD-11 concept with all related NAMASTE concepts
+        concept_serializer = ICD11ConceptDetailSerializer(
+            icd11_concept, context=serializer_context
+        )
+
+        # Build response
+        response_data = {
+            "concept": concept_serializer.data,
+            "meta": {
+                "system": "icd11",
+                "concept_id": concept_id,
+                "retrieved_at": timezone.now().isoformat(),
+                "cache_duration": 600,
+                "api_version": "1.0.0",
+                "filters_applied": filters,
+            },
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error in ICD-11 concept detail view: {str(e)}", exc_info=True)
+        return Response(
+            {
+                "error": "Internal server error",
+                "message": "Failed to retrieve ICD-11 concept details",
                 "code": "INTERNAL_ERROR",
                 "debug_info": str(e) if settings.DEBUG else None,
             },
