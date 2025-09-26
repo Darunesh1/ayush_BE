@@ -24,6 +24,11 @@ urlpatterns = [
         views.get_unani_concept_detail,
         name="unani-concept-detail",
     ),
+    path(
+        "icd11/<int:concept_id>/detail/",
+        views.get_icd11_concept_detail,
+        name="icd11-concept-detail",
+    ),
     # Manual mapping endpoints
     path(
         "manual/create/",
