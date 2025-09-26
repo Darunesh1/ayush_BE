@@ -990,7 +990,7 @@ def get_unani_concept_detail(request, concept_id):
             response=ErrorResponseSerializer, description="Internal server error"
         ),
     },
-    tags=["ICD-11 Concepts"],
+    tags=["NAMASTE Concepts"],
     operation_id="getICD11ConceptDetail",
 )
 @api_view(["GET"])
