@@ -10,10 +10,10 @@ Fixed: 'list' object has no attribute 'pk' errors with safe object access
 import logging
 
 from django.contrib.contenttypes.models import ContentType
-from django.db import models
+from django.db.models import Avg, Count, Q
 from rest_framework import serializers
 
-from terminologies.models import Ayurvedha, Siddha, Unani
+from terminologies.models import Ayurvedha, ICD11Term, Siddha, TermMapping, Unani
 
 # Import your models - adjust paths according to your project structure
 from .models import ConceptMapping, MappingAudit, TerminologyMapping
@@ -1001,3 +1001,220 @@ class ICD11SearchResponseSerializer(serializers.Serializer):
     suggestions = serializers.ListField(
         child=serializers.CharField(), required=False, help_text="Search suggestions"
     )
+
+
+class ICD11ConceptDetailSerializer(serializers.ModelSerializer):
+    """
+    Comprehensive serializer for ICD-11 concepts with all related NAMASTE mappings
+    CORRECTED to use actual model names from your models.py
+    """
+
+    # Related NAMASTE concepts
+    related_ayurveda = serializers.SerializerMethodField()
+    related_siddha = serializers.SerializerMethodField()
+    related_unani = serializers.SerializerMethodField()
+
+    # Mapping statistics
+    namaste_mapping_summary = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ICD11Term  # CORRECTED: Using actual model name
+        fields = [
+            "id",
+            "code",
+            "title",
+            "definition",
+            "long_definition",
+            "foundation_uri",
+            "browser_url",
+            "class_kind",
+            "index_terms",
+            "parent",
+            "inclusions",
+            "exclusions",
+            "related_ayurveda",
+            "related_siddha",
+            "related_unani",
+            "namaste_mapping_summary",
+        ]
+
+    def get_related_ayurveda(self, obj):
+        """Get all related Ayurveda concepts with mapping details"""
+        try:
+            # Using TermMapping model with correct field names
+            mappings = TermMapping.objects.filter(
+                icd_term=obj, source_system="ayurveda"
+            ).select_related("primary_ayurveda_term")
+
+            if not mappings.exists():
+                return None
+
+            related_concepts = []
+            for mapping in mappings:
+                try:
+                    ayurveda_term = mapping.primary_ayurveda_term
+                    if ayurveda_term:
+                        related_concepts.append(
+                            {
+                                "concept": AyurvedaConceptSerializer(
+                                    ayurveda_term
+                                ).data,
+                                "mapping": {
+                                    "id": mapping.id,
+                                    "confidence_score": mapping.confidence_score,
+                                    "icd_similarity": mapping.icd_similarity,
+                                    "source_system": mapping.source_system,
+                                    "created_at": mapping.created_at,
+                                },
+                            }
+                        )
+                except Exception as e:
+                    logger.warning(f"Error getting Ayurveda concept: {str(e)}")
+                    continue
+
+            return related_concepts if related_concepts else None
+
+        except Exception as e:
+            logger.error(f"Error in get_related_ayurveda: {str(e)}")
+            return None
+
+    def get_related_siddha(self, obj):
+        """Get all related Siddha concepts with mapping details"""
+        try:
+            mappings = TermMapping.objects.filter(
+                icd_term=obj, source_system="siddha"
+            ).select_related("primary_siddha_term")
+
+            if not mappings.exists():
+                return None
+
+            related_concepts = []
+            for mapping in mappings:
+                try:
+                    siddha_term = mapping.primary_siddha_term
+                    if siddha_term:
+                        related_concepts.append(
+                            {
+                                "concept": SiddhaConceptSerializer(siddha_term).data,
+                                "mapping": {
+                                    "id": mapping.id,
+                                    "confidence_score": mapping.confidence_score,
+                                    "icd_similarity": mapping.icd_similarity,
+                                    "source_system": mapping.source_system,
+                                    "created_at": mapping.created_at,
+                                },
+                            }
+                        )
+                except Exception as e:
+                    logger.warning(f"Error getting Siddha concept: {str(e)}")
+                    continue
+
+            return related_concepts if related_concepts else None
+
+        except Exception as e:
+            logger.error(f"Error in get_related_siddha: {str(e)}")
+            return None
+
+    def get_related_unani(self, obj):
+        """Get all related Unani concepts with mapping details"""
+        try:
+            mappings = TermMapping.objects.filter(
+                icd_term=obj, source_system="unani"
+            ).select_related("primary_unani_term")
+
+            if not mappings.exists():
+                return None
+
+            related_concepts = []
+            for mapping in mappings:
+                try:
+                    unani_term = mapping.primary_unani_term
+                    if unani_term:
+                        related_concepts.append(
+                            {
+                                "concept": UnaniConceptSerializer(unani_term).data,
+                                "mapping": {
+                                    "id": mapping.id,
+                                    "confidence_score": mapping.confidence_score,
+                                    "icd_similarity": mapping.icd_similarity,
+                                    "source_system": mapping.source_system,
+                                    "created_at": mapping.created_at,
+                                },
+                            }
+                        )
+                except Exception as e:
+                    logger.warning(f"Error getting Unani concept: {str(e)}")
+                    continue
+
+            return related_concepts if related_concepts else None
+
+        except Exception as e:
+            logger.error(f"Error in get_related_unani: {str(e)}")
+            return None
+
+    def get_namaste_mapping_summary(self, obj):
+        """Get summary statistics of all NAMASTE mappings"""
+        try:
+            # Using TermMapping model instead of ConceptMapping
+            all_mappings = TermMapping.objects.filter(icd_term=obj)
+
+            total_mappings = all_mappings.count()
+            if total_mappings == 0:
+                return None
+
+            # Count by system using source_system field
+            ayurveda_count = all_mappings.filter(source_system="ayurveda").count()
+            siddha_count = all_mappings.filter(source_system="siddha").count()
+            unani_count = all_mappings.filter(source_system="unani").count()
+
+            # Quality statistics - using confidence_score field
+            stats = all_mappings.aggregate(
+                high_confidence_count=Count("id", filter=Q(confidence_score__gte=0.85)),
+                avg_confidence=Avg("confidence_score"),
+                avg_icd_similarity=Avg("icd_similarity"),
+            )
+
+            return {
+                "total_mappings": total_mappings,
+                "by_system": {
+                    "ayurveda": ayurveda_count,
+                    "siddha": siddha_count,
+                    "unani": unani_count,
+                },
+                "quality_metrics": {
+                    "high_confidence_count": stats["high_confidence_count"],
+                    "avg_confidence": round(stats["avg_confidence"] or 0.0, 3),
+                    "avg_icd_similarity": round(stats["avg_icd_similarity"] or 0.0, 3),
+                    "high_confidence_rate": round(
+                        (stats["high_confidence_count"] / total_mappings * 100)
+                        if total_mappings > 0
+                        else 0.0,
+                        1,
+                    ),
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"Error in get_namaste_mapping_summary: {str(e)}")
+            return None
+
+
+class MetaInfoSerializer(serializers.Serializer):
+    """Serializer for metadata information"""
+
+    system = serializers.CharField(help_text="System type (icd11)")
+    concept_id = serializers.IntegerField(help_text="ID of the ICD-11 concept")
+    retrieved_at = serializers.DateTimeField(
+        help_text="Timestamp when data was retrieved"
+    )
+    cache_duration = serializers.IntegerField(help_text="Cache duration in seconds")
+    api_version = serializers.CharField(help_text="API version")
+
+
+class ICD11DetailResponseSerializer(serializers.Serializer):
+    """Response serializer for ICD-11 concept detail endpoints"""
+
+    concept = ICD11ConceptDetailSerializer(
+        help_text="Complete ICD-11 concept with all related NAMASTE mappings"
+    )
+    meta = MetaInfoSerializer(help_text="Metadata about the request and response")
