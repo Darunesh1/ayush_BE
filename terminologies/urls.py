@@ -32,6 +32,9 @@ urlpatterns = [
     # ============================================================================
     path("icd11/search/", views.icd11_advanced_search, name="icd11_advanced_search"),
     path("icd11/autocomplete/", views.icd11_autocomplete, name="icd11_autocomplete"),
+    path(
+        "search/combined/", views.combined_icd11_namaste_search, name="combined-search"
+    ),
     # ============================================================================
     # NAMASTE ↔ ICD-11 MAPPING ENDPOINTS
     # ============================================================================
