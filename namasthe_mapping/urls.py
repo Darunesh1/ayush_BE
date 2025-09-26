@@ -19,11 +19,11 @@ urlpatterns = [
         views.get_siddha_concept_detail,
         name="siddha-concept-detail",
     ),
-    # path(
-    #     "unani/<int:concept_id>/detail/",
-    #     views.get_unani_concept_detail,
-    #     name="unani-concept-detail",
-    # ),
+    path(
+        "unani/<int:concept_id>/detail/",
+        views.get_unani_concept_detail,
+        name="unani-concept-detail",
+    ),
     # Manual mapping endpoints
     path(
         "manual/create/",
