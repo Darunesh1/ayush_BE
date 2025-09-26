@@ -13,7 +13,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db.models import Avg, Count, Q
 from rest_framework import serializers
 
-from terminologies.models import Ayurvedha, ICD11Term, Siddha, TermMapping, Unani
+from terminologies.models import Ayurvedha, Siddha, TermMapping, Unani
 
 # Import your models - adjust paths according to your project structure
 from .models import ConceptMapping, MappingAudit, TerminologyMapping
@@ -960,21 +960,6 @@ class MappingUpdateResponseSerializer(serializers.Serializer):
     )
     previous_values = serializers.DictField(
         required=False, help_text="Previous values of changed fields"
-    )
-
-
-class ErrorResponseSerializer(serializers.Serializer):
-    """Serializer for error responses"""
-
-    success = serializers.BooleanField(
-        default=False, help_text="Always false for errors"
-    )
-    message = serializers.CharField(help_text="Error message")
-    errors = serializers.DictField(
-        required=False, help_text="Detailed validation errors"
-    )
-    error_code = serializers.CharField(
-        required=False, help_text="Machine-readable error code"
     )
 
 
