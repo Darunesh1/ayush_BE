@@ -14,11 +14,11 @@ urlpatterns = [
         views.get_ayurveda_concept_detail,
         name="ayurveda-concept-detail",
     ),
-    # path(
-    #     "siddha/<int:concept_id>/detail/",
-    #     views.get_siddha_concept_detail,
-    #     name="siddha-concept-detail",
-    # ),
+    path(
+        "siddha/<int:concept_id>/detail/",
+        views.get_siddha_concept_detail,
+        name="siddha-concept-detail",
+    ),
     # path(
     #     "unani/<int:concept_id>/detail/",
     #     views.get_unani_concept_detail,

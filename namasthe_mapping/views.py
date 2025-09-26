@@ -383,6 +383,250 @@ def get_ayurveda_concept_detail(request, concept_id):
         )
 
 
+# =============================================================================
+# SIDDHA CONCEPT DETAIL VIEW WITH SWAGGER DOCUMENTATION
+# =============================================================================
+
+
+@extend_schema(
+    summary="Get Siddha Concept Details",
+    description="""
+    Retrieve detailed information for a Siddha concept with all mapped ICD-11 terms.
+    
+    **Features:**
+    - Complete Siddha concept details (Tamil name, romanized name, references)
+    - All mapped ICD-11 terms with TinyBioBERT confidence scores
+    - Comprehensive mapping statistics and quality metrics
+    - Advanced filtering by confidence score and validation status
+    - Pagination for large mapping sets
+    - Optional 768-dimensional TinyBioBERT embeddings for ONNX processing
+    """,
+    parameters=[
+        OpenApiParameter(
+            name="concept_id",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.PATH,
+            description="Primary key ID of the Siddha concept",
+            required=True,
+            examples=[
+                OpenApiExample("Small ID", value=123),
+                OpenApiExample("Large ID", value=456789),
+                OpenApiExample("Single digit", value=7),
+            ],
+        ),
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Page number for pagination",
+            required=False,
+            examples=[
+                OpenApiExample("First page", value=1),
+                OpenApiExample("Second page", value=2),
+                OpenApiExample("Later page", value=10),
+            ],
+        ),
+        OpenApiParameter(
+            name="min_confidence",
+            type=OpenApiTypes.FLOAT,
+            location=OpenApiParameter.QUERY,
+            description="Filter mappings by minimum TinyBioBERT confidence score (0.0-1.0)",
+            required=False,
+            examples=[
+                OpenApiExample("Low confidence", value=0.5),
+                OpenApiExample("Medium confidence", value=0.75),
+                OpenApiExample("High confidence", value=0.85),
+                OpenApiExample("Very high confidence", value=0.95),
+            ],
+        ),
+        OpenApiParameter(
+            name="validated_only",
+            type=OpenApiTypes.BOOL,
+            location=OpenApiParameter.QUERY,
+            description="Show only expert-validated mappings",
+            required=False,
+            examples=[
+                OpenApiExample("Show all mappings", value=False),
+                OpenApiExample("Only validated mappings", value=True),
+            ],
+        ),
+        OpenApiParameter(
+            name="include_embeddings",
+            type=OpenApiTypes.BOOL,
+            location=OpenApiParameter.QUERY,
+            description="Include 768-dimensional TinyBioBERT embeddings in response",
+            required=False,
+            examples=[
+                OpenApiExample("Without embeddings", value=False),
+                OpenApiExample("With TinyBioBERT embeddings", value=True),
+            ],
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(
+            response=ConceptDetailResponseSerializer,
+            description="Successful retrieval of Siddha concept with all mappings and statistics",
+            examples=[
+                OpenApiExample(
+                    "Complete Siddha concept response",
+                    value={
+                        "concept": {
+                            "id": 123,
+                            "code": "SI-FEVER-001",
+                            "english_name": "Fever",
+                            "tamil_name": "காய்ச்சல்",
+                            "romanized_name": "Kaychaal",
+                            "reference": "Agasthiyar Gunavagadam",
+                        },
+                        "mapping_statistics": {
+                            "total_mappings": 25,
+                            "validated_mappings": 20,
+                            "high_confidence_mappings": 15,
+                        },
+                    },
+                )
+            ],
+        ),
+        400: OpenApiResponse(
+            response=ErrorResponseSerializer,
+            description="Bad request - invalid concept ID or parameters",
+            examples=[
+                OpenApiExample(
+                    "Invalid concept ID",
+                    value={
+                        "error": "Invalid concept ID",
+                        "message": "Concept ID must be a valid integer",
+                        "code": "INVALID_CONCEPT_ID",
+                    },
+                )
+            ],
+        ),
+        404: OpenApiResponse(
+            response=ErrorResponseSerializer, description="Concept not found"
+        ),
+        500: OpenApiResponse(
+            response=ErrorResponseSerializer, description="Internal server error"
+        ),
+    },
+    tags=["NAMASTE Concepts"],
+    operation_id="getSiddhaConceptDetail",
+)
+@api_view(["GET"])
+@renderer_classes([JSONRenderer])
+@cache_page(60 * 10)  # 10-minute cache
+def get_siddha_concept_detail(request, concept_id):
+    """
+    Get detailed information for a Siddha concept with all ICD-11 mappings
+    URL: /namasthe_mapping/siddha/{concept_id}/detail/
+    """
+
+    try:
+        # Validate concept_id
+        try:
+            concept_id = int(concept_id)
+        except (ValueError, TypeError):
+            return Response(
+                {
+                    "error": "Invalid concept ID",
+                    "message": "Concept ID must be a valid integer",
+                    "code": "INVALID_CONCEPT_ID",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Get Siddha concept
+        try:
+            siddha_concept = Siddha.objects.get(pk=concept_id)
+        except Siddha.DoesNotExist:
+            return Response(
+                {
+                    "error": "Concept not found",
+                    "message": f"Siddha concept with ID {concept_id} not found",
+                    "code": "CONCEPT_NOT_FOUND",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Parse and validate query parameters
+        page = max(1, int(request.GET.get("page", 1)))
+        page_size = min(int(request.GET.get("page_size", 20)), 100)
+        include_embeddings = request.GET.get("include_embeddings", "").lower() == "true"
+
+        filters = {
+            "min_confidence": request.GET.get("min_confidence"),
+            "validated_only": request.GET.get("validated_only", "").lower() == "true",
+            "high_confidence_only": request.GET.get("high_confidence_only", "").lower()
+            == "true",
+        }
+
+        # Get ContentType and build optimized query
+        content_type = ContentType.objects.get_for_model(Siddha)
+        mappings_query = get_optimized_mappings_query(content_type, concept_id, filters)
+
+        # Get comprehensive statistics with single aggregate query
+        mapping_stats = mappings_query.aggregate(
+            total_mappings=Count("id"),
+            validated_mappings=Count("id", filter=Q(is_validated=True)),
+            high_confidence_mappings=Count("id", filter=Q(is_high_confidence=True)),
+            needs_review_count=Count("id", filter=Q(needs_review=True)),
+            has_issues_count=Count("id", filter=Q(has_issues=True)),
+            avg_confidence=Avg("confidence_score"),
+            avg_similarity=Avg("similarity_score"),
+            max_confidence=Max("confidence_score"),
+            min_confidence=Min("confidence_score"),
+        )
+
+        # Implement pagination
+        total_count = mapping_stats["total_mappings"]
+        offset = (page - 1) * page_size
+        mappings_page = mappings_query[offset : offset + page_size]
+
+        # Serialize concept and mappings
+        concept_serializer = SiddhaConceptSerializer(siddha_concept)
+        mappings_serializer = ConceptMappingDetailSerializer(
+            mappings_page,
+            many=True,
+            context={"request": request, "include_embeddings": include_embeddings},
+        )
+
+        # Build comprehensive response
+        response_data = {
+            "concept": concept_serializer.data,
+            "mapping_statistics": format_statistics_response(mapping_stats),
+            "mappings": {
+                "data": mappings_serializer.data,
+                "pagination": build_pagination_info(page, page_size, total_count),
+            },
+            "filters_applied": {
+                "min_confidence": filters["min_confidence"],
+                "validated_only": filters["validated_only"],
+                "high_confidence_only": filters["high_confidence_only"],
+                "include_embeddings": include_embeddings,
+            },
+            "meta": {
+                "system": "siddha",
+                "concept_id": concept_id,
+                "retrieved_at": timezone.now().isoformat(),
+                "cache_duration": 600,
+                "api_version": "1.0.0",
+            },
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error in Siddha concept detail view: {str(e)}", exc_info=True)
+        return Response(
+            {
+                "error": "Internal server error",
+                "message": "Failed to retrieve Siddha concept details",
+                "code": "INTERNAL_ERROR",
+                "debug_info": str(e) if settings.DEBUG else None,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
 @extend_schema(
     summary="Create Manual NAMASTE to ICD-11 Mapping",
     description="""
