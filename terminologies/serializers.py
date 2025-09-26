@@ -729,3 +729,58 @@ class RecentMappingSerializer(serializers.Serializer):
     icd_title = serializers.CharField()
     confidence_score = serializers.FloatField()
     created_at = serializers.DateTimeField()
+
+
+class SimpleNAMASTEConceptSerializer(serializers.Serializer):
+    """Simple serializer for NAMASTE concepts in search results"""
+
+    id = serializers.IntegerField()
+    code = serializers.CharField()
+    english_name = serializers.CharField()
+    local_name = serializers.CharField()  # Hindi/Tamil/Arabic name
+
+
+class TermMappingSerializer(serializers.Serializer):
+    """Serializer for term mapping details"""
+
+    id = serializers.IntegerField()
+    confidence_score = serializers.FloatField()
+    icd_similarity = serializers.FloatField()
+    source_system = serializers.CharField()
+
+
+class ICD11SearchResultSerializer(serializers.Serializer):
+    """Serializer for ICD-11 search results with related NAMASTE concepts"""
+
+    # ICD-11 basic info
+    id = serializers.IntegerField()
+    code = serializers.CharField()
+    title = serializers.CharField()
+    definition = serializers.CharField(allow_null=True)
+
+    # Related NAMASTE concepts (null if not present)
+    related_ayurveda = SimpleNAMASTEConceptSerializer(allow_null=True)
+    related_siddha = SimpleNAMASTEConceptSerializer(allow_null=True)
+    related_unani = SimpleNAMASTEConceptSerializer(allow_null=True)
+
+    # Mapping details if NAMASTE concepts exist
+    mapping_info = TermMappingSerializer(allow_null=True)
+
+    # Search relevance score
+    search_score = serializers.FloatField()
+
+
+class CombinedSearchResponseSerializer(serializers.Serializer):
+    """Response serializer for combined search API"""
+
+    results = ICD11SearchResultSerializer(many=True)
+    pagination = serializers.DictField()
+    search_metadata = serializers.DictField()
+
+
+class ErrorResponseSerializer(serializers.Serializer):
+    """Error response serializer"""
+
+    error = serializers.CharField()
+    message = serializers.CharField()
+    code = serializers.CharField()
