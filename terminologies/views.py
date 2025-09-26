@@ -1,12 +1,16 @@
 import csv
+import logging
 from io import TextIOWrapper
 
+from django.conf import settings
 from django.contrib.postgres.search import SearchQuery, SearchRank, TrigramSimilarity
 from django.core.paginator import Paginator
 from django.db import models, transaction
 from django.db.models import Case, Count, F, FloatField, Q, Value, When
 from django.db.models.functions import Cast
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.views.decorators.cache import cache_page
 from drf_spectacular.openapi import AutoSchema
 from drf_spectacular.types import OpenApiTypes
 
@@ -18,15 +22,18 @@ from drf_spectacular.utils import (
     extend_schema,
 )
 from rest_framework import status
-from rest_framework.decorators import api_view, parser_classes
+from rest_framework.decorators import api_view, parser_classes, renderer_classes
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 
 from .models import Ayurvedha, ICD11Term, Siddha, TermMapping, Unani
 from .serializers import (
     AyurvedhaListSerializer,
     AyurvedhaSerializer,
+    CombinedSearchResponseSerializer,
+    ErrorResponseSerializer,
     ICD11TermListSerializer,
     ICD11TermSearchSerializer,
     RecentMappingSerializer,
@@ -37,6 +44,8 @@ from .serializers import (
     UnaniListSerializer,
 )
 from .services.mapping_service import NamasteToICDMappingService
+
+logger = logging.getLogger(__name__)
 
 
 @extend_schema(
@@ -1907,6 +1916,462 @@ def icd11_autocomplete(request):
     # Extract only title
     titles = list(queryset.values_list("title", flat=True)[:limit])
     return Response(titles)
+
+
+@extend_schema(
+    summary="Combined ICD-11 and NAMASTE Concept Search",
+    description="""
+    Search for ICD-11 terms and retrieve their related NAMASTE concepts in one API call.
+    
+    **Features:**
+    - Advanced fuzzy search across ICD-11 terms using PostgreSQL trigrams
+    - Full-text search with ranking when search_vector is available
+    - Returns ICD-11: id, code, title, definition
+    - Returns related NAMASTE concepts: id, code, english_name, local_name
+    - Returns null for NAMASTE systems with no mappings
+    - Confidence scores and mapping metadata
+    - Pagination support with configurable page size
+    - Multiple search strategies (fuzzy, full-text, exact)
+    """,
+    parameters=[
+        OpenApiParameter(
+            name="q",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Search query term",
+            required=True,
+            examples=[
+                OpenApiExample("Medical condition", value="diabetes"),
+                OpenApiExample("ICD code", value="E11"),
+                OpenApiExample("Complex term", value="chronic kidney disease"),
+            ],
+        ),
+        OpenApiParameter(
+            name="fuzzy",
+            type=OpenApiTypes.BOOL,
+            location=OpenApiParameter.QUERY,
+            description="Use fuzzy search with trigram similarity",
+            required=False,
+            examples=[
+                OpenApiExample("Enable fuzzy search", value=True),
+                OpenApiExample("Disable fuzzy search", value=False),
+            ],
+        ),
+        OpenApiParameter(
+            name="use_fts",
+            type=OpenApiTypes.BOOL,
+            location=OpenApiParameter.QUERY,
+            description="Use full-text search with search_vector",
+            required=False,
+            examples=[
+                OpenApiExample("Enable FTS", value=True),
+                OpenApiExample("Disable FTS", value=False),
+            ],
+        ),
+        OpenApiParameter(
+            name="threshold",
+            type=OpenApiTypes.FLOAT,
+            location=OpenApiParameter.QUERY,
+            description="Similarity threshold for fuzzy search (0.0-1.0)",
+            required=False,
+            examples=[
+                OpenApiExample("Low threshold", value=0.2),
+                OpenApiExample("Medium threshold", value=0.4),
+                OpenApiExample("High threshold", value=0.6),
+            ],
+        ),
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Page number for pagination",
+            required=False,
+            examples=[
+                OpenApiExample("First page", value=1),
+                OpenApiExample("Second page", value=2),
+            ],
+        ),
+        OpenApiParameter(
+            name="page_size",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Number of results per page (max 50)",
+            required=False,
+            examples=[
+                OpenApiExample("Small page", value=10),
+                OpenApiExample("Default page", value=20),
+                OpenApiExample("Large page", value=50),
+            ],
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(
+            response=CombinedSearchResponseSerializer,
+            description="Successful search with ICD-11 results and related NAMASTE concepts",
+            examples=[
+                OpenApiExample(
+                    "Successful search response",
+                    value={
+                        "results": [
+                            {
+                                "id": 123,
+                                "code": "E11",
+                                "title": "Type 2 diabetes mellitus",
+                                "definition": "A metabolic disorder characterized by high blood sugar",
+                                "related_ayurveda": {
+                                    "id": 456,
+                                    "code": "AY-MADHUMEHA-001",
+                                    "english_name": "Madhumeha",
+                                    "local_name": "मधुमेह",
+                                },
+                                "related_siddha": None,
+                                "related_unani": {
+                                    "id": 789,
+                                    "code": "UN-ZIABITUS-001",
+                                    "english_name": "Ziabitus Sukari",
+                                    "local_name": "ذیابیطس سکری",
+                                },
+                                "mapping_info": {
+                                    "id": 101,
+                                    "confidence_score": 0.92,
+                                    "icd_similarity": 0.88,
+                                    "source_system": "ayurveda",
+                                },
+                                "search_score": 8.5,
+                            }
+                        ],
+                        "pagination": {
+                            "page": 1,
+                            "page_size": 20,
+                            "total_pages": 5,
+                            "total_count": 95,
+                            "has_next": True,
+                            "has_previous": False,
+                        },
+                        "search_metadata": {
+                            "query": "diabetes",
+                            "search_strategy": "fuzzy",
+                            "total_icd_matches": 95,
+                            "matches_with_namaste": 23,
+                            "executed_at": "2025-09-26T22:17:00Z",
+                        },
+                    },
+                )
+            ],
+        ),
+        400: OpenApiResponse(
+            response=ErrorResponseSerializer,
+            description="Bad request - missing or invalid parameters",
+        ),
+        500: OpenApiResponse(
+            response=ErrorResponseSerializer, description="Internal server error"
+        ),
+    },
+    tags=["Combined Search"],
+    operation_id="combinedICD11NAMASTESearch",
+)
+@api_view(["GET"])
+@renderer_classes([JSONRenderer])
+@cache_page(60 * 5)  # 5-minute cache
+def combined_icd11_namaste_search(request):
+    """
+    Combined search API that searches ICD-11 terms and returns related NAMASTE concepts
+    URL: /terminologies/search/combined/
+    """
+
+    try:
+        # Get and validate search parameters
+        search_term = request.query_params.get("q", "").strip()
+        if not search_term:
+            return Response(
+                {
+                    "error": "Missing search query",
+                    "message": "Parameter 'q' is required",
+                    "code": "MISSING_QUERY",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Search configuration
+        use_fuzzy = request.query_params.get("fuzzy", "").lower() in ["true", "1"]
+        use_fts = request.query_params.get("use_fts", "").lower() in ["true", "1"]
+        similarity_threshold = float(request.query_params.get("threshold", "0.2"))
+
+        # Pagination
+        page = int(request.query_params.get("page", 1))
+        page_size = min(int(request.query_params.get("page_size", 20)), 50)
+
+        # Perform ICD-11 search based on strategy
+        icd_queryset, search_strategy = perform_icd11_search(
+            search_term, use_fuzzy, use_fts, similarity_threshold
+        )
+
+        # Apply pagination to ICD-11 results
+        paginator = Paginator(icd_queryset, page_size)
+        try:
+            page_obj = paginator.get_page(page)
+        except Exception as e:
+            logger.warning(f"Pagination error: {str(e)}")
+            page_obj = paginator.get_page(1)
+
+        # Get ICD-11 results for current page
+        icd_results = list(page_obj.object_list)
+
+        # Build combined results with NAMASTE mappings
+        combined_results = []
+        namaste_match_count = 0
+
+        for icd_term in icd_results:
+            # Get the best mapping for this ICD-11 term
+            mapping = get_best_namaste_mapping(icd_term)
+
+            # Build result object
+            result = {
+                "id": icd_term.id,
+                "code": icd_term.code,
+                "title": icd_term.title,
+                "definition": icd_term.definition,
+                "related_ayurveda": None,
+                "related_siddha": None,
+                "related_unani": None,
+                "mapping_info": None,
+                "search_score": getattr(icd_term, "search_score", 0.0),
+            }
+
+            # Add NAMASTE mappings if they exist
+            if mapping:
+                namaste_match_count += 1
+                result["mapping_info"] = {
+                    "id": mapping.id,
+                    "confidence_score": mapping.confidence_score,
+                    "icd_similarity": mapping.icd_similarity,
+                    "source_system": mapping.source_system,
+                }
+
+                # Add related concepts based on source system
+                if (
+                    mapping.source_system == "ayurveda"
+                    and mapping.primary_ayurveda_term
+                ):
+                    result["related_ayurveda"] = format_namaste_concept(
+                        mapping.primary_ayurveda_term, "ayurveda"
+                    )
+                elif mapping.source_system == "siddha" and mapping.primary_siddha_term:
+                    result["related_siddha"] = format_namaste_concept(
+                        mapping.primary_siddha_term, "siddha"
+                    )
+                elif mapping.source_system == "unani" and mapping.primary_unani_term:
+                    result["related_unani"] = format_namaste_concept(
+                        mapping.primary_unani_term, "unani"
+                    )
+
+                # Add cross-system mappings if they exist
+                if mapping.cross_ayurveda_term:
+                    result["related_ayurveda"] = format_namaste_concept(
+                        mapping.cross_ayurveda_term, "ayurveda"
+                    )
+                if mapping.cross_siddha_term:
+                    result["related_siddha"] = format_namaste_concept(
+                        mapping.cross_siddha_term, "siddha"
+                    )
+                if mapping.cross_unani_term:
+                    result["related_unani"] = format_namaste_concept(
+                        mapping.cross_unani_term, "unani"
+                    )
+
+            combined_results.append(result)
+
+        # Build response
+        response_data = {
+            "results": combined_results,
+            "pagination": {
+                "page": page_obj.number,
+                "page_size": page_size,
+                "total_pages": paginator.num_pages,
+                "total_count": paginator.count,
+                "has_next": page_obj.has_next(),
+                "has_previous": page_obj.has_previous(),
+            },
+            "search_metadata": {
+                "query": search_term,
+                "search_strategy": search_strategy,
+                "total_icd_matches": paginator.count,
+                "matches_with_namaste": namaste_match_count,
+                "executed_at": timezone.now().isoformat(),
+                "similarity_threshold": similarity_threshold if use_fuzzy else None,
+            },
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+    except ValueError as e:
+        return Response(
+            {
+                "error": "Invalid parameter",
+                "message": str(e),
+                "code": "INVALID_PARAMETER",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as e:
+        logger.error(f"Error in combined search: {str(e)}", exc_info=True)
+        return Response(
+            {
+                "error": "Internal server error",
+                "message": "Failed to perform combined search",
+                "code": "INTERNAL_ERROR",
+                "debug_info": str(e) if settings.DEBUG else None,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+
+def perform_icd11_search(search_term, use_fuzzy, use_fts, similarity_threshold):
+    """
+    Perform ICD-11 search based on selected strategy
+    Returns tuple of (queryset, strategy_name)
+    """
+
+    if use_fts and hasattr(ICD11Term, "search_vector"):
+        # Full-text search strategy
+        search_query = SearchQuery(search_term)
+        queryset = (
+            ICD11Term.objects.filter(search_vector=search_query)
+            .annotate(
+                search_score=SearchRank(F("search_vector"), search_query),
+                rank=SearchRank(F("search_vector"), search_query),
+            )
+            .order_by("-rank", "code")
+        )
+        return queryset, "full_text_search"
+
+    elif use_fuzzy:
+        # Fuzzy search strategy with trigram similarity
+        queryset = (
+            ICD11Term.objects.annotate(
+                code_sim=TrigramSimilarity("code", search_term),
+                title_sim=TrigramSimilarity("title", search_term),
+                definition_sim=TrigramSimilarity("definition", search_term),
+                # JSON field similarity
+                index_terms_sim=Case(
+                    When(
+                        index_terms__isnull=False,
+                        then=TrigramSimilarity(
+                            Cast("index_terms", models.TextField()),
+                            search_term,
+                        ),
+                    ),
+                    default=Value(0.0),
+                    output_field=FloatField(),
+                ),
+            )
+            .filter(
+                Q(code_sim__gte=similarity_threshold)
+                | Q(title_sim__gte=similarity_threshold)
+                | Q(definition_sim__gte=similarity_threshold)
+                | Q(index_terms_sim__gte=similarity_threshold)
+            )
+            .annotate(
+                search_score=(
+                    F("code_sim")
+                    + F("title_sim")
+                    + F("definition_sim")
+                    + F("index_terms_sim")
+                )
+            )
+            .distinct()
+            .order_by("-search_score", "code")
+        )
+        return queryset, "fuzzy_search"
+
+    else:
+        # Traditional icontains search
+        basic_filter = (
+            Q(code__icontains=search_term)
+            | Q(title__icontains=search_term)
+            | Q(definition__icontains=search_term)
+        )
+
+        json_filter = (
+            Q(index_terms__icontains=search_term)
+            | Q(inclusions__icontains=search_term)
+            | Q(exclusions__icontains=search_term)
+        )
+
+        queryset = (
+            ICD11Term.objects.filter(basic_filter | json_filter)
+            .distinct()
+            .annotate(
+                search_score=Case(
+                    When(title__iexact=search_term, then=Value(10.0)),
+                    When(code__iexact=search_term, then=Value(9.0)),
+                    When(title__istartswith=search_term, then=Value(8.0)),
+                    When(code__istartswith=search_term, then=Value(7.0)),
+                    When(title__icontains=search_term, then=Value(6.0)),
+                    default=Value(1.0),
+                    output_field=FloatField(),
+                )
+            )
+            .order_by("-search_score", "code")
+        )
+        return queryset, "exact_search"
+
+
+def get_best_namaste_mapping(icd_term):
+    """
+    Get the best NAMASTE mapping for an ICD-11 term
+    Returns the mapping with highest confidence score
+    """
+    try:
+        return (
+            TermMapping.objects.filter(icd_term=icd_term)
+            .select_related(
+                "primary_ayurveda_term",
+                "primary_siddha_term",
+                "primary_unani_term",
+                "cross_ayurveda_term",
+                "cross_siddha_term",
+                "cross_unani_term",
+            )
+            .order_by("-confidence_score", "-icd_similarity")
+            .first()
+        )
+    except Exception as e:
+        logger.warning(f"Error getting NAMASTE mapping: {str(e)}")
+        return None
+
+
+def format_namaste_concept(concept, system_type):
+    """
+    Format a NAMASTE concept for API response
+    Returns dict with id, code, english_name, local_name
+    """
+    if not concept:
+        return None
+
+    try:
+        local_name = None
+        if system_type == "ayurveda":
+            local_name = getattr(concept, "hindi_name", None)
+        elif system_type == "siddha":
+            local_name = getattr(concept, "tamil_name", None)
+        elif system_type == "unani":
+            local_name = getattr(concept, "arabic_name", None)
+
+        return {
+            "id": concept.id,
+            "code": concept.code,
+            "english_name": concept.english_name,
+            "local_name": local_name,
+        }
+    except Exception as e:
+        logger.warning(f"Error formatting {system_type} concept: {str(e)}")
+        return None
 
 
 @api_view(["GET"])
