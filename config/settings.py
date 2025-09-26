@@ -30,11 +30,20 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 
-ALLOWED_HOSTS = ["*"]
+# Environment-based ALLOWED_HOSTS (standard practice)
+ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
+# CSRF and CORS settings for HTTPS with nginx proxy
+CSRF_TRUSTED_ORIGINS = [
+    "https://ayushbandan.duckdns.org",
+    "https://ayushbandhan.vercel.app",
+    "https://ayush-documentation.vercel.app",
+]
+
+# Tell Django to trust nginx proxy headers for HTTPS detection
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # Application definition
-
 INSTALLED_APPS = [
     "admin_interface",  # add back
     "colorfield",
@@ -70,16 +79,19 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
 # CORS Settings
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",  # React default
     "http://127.0.0.1:3000",
     "http://localhost:8080",  # Vue default
     "http://127.0.0.1:8080",
-    # Add your frontend URLs
+    "https://ayushbandan.duckdns.org",  # Add your HTTPS domain
+    "https://ayushbandhan.vercel.app",  # Your main frontend
+    "https://ayush-documentation.vercel.app",  # Your documentation frontend
 ]
-# For development only - allows all origins (NOT for production)
-CORS_ALLOW_ALL_ORIGINS = True  # Remove this in production
+# For development only - remove this in production
+CORS_ALLOW_ALL_ORIGINS = False  # Only allow all origins in debug mode
 
 # Allow credentials to be included in CORS requests
 CORS_ALLOW_CREDENTIALS = True
@@ -106,7 +118,6 @@ CORS_ALLOW_METHODS = [
     "PUT",
 ]
 
-
 ROOT_URLCONF = "config.urls"
 
 TEMPLATES = [
@@ -126,10 +137,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-
 # Database
-# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -142,34 +150,28 @@ DATABASES = {
 }
 
 REST_FRAMEWORK = {
-    # Add this line for drf-spectacular to work
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
-    # Keep your existing authentication classes
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],
-    # Keep your existing permission classes
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.AllowAny",  # change to IsAuthenticated later
     ],
-    # Add these useful settings for your medical API
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
-    "PAGE_SIZE": 50,  # Good for medical record lists
-    # Add filtering and search capabilities for NAMASTE codes
+    "PAGE_SIZE": 50,
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",
         "rest_framework.filters.OrderingFilter",
     ],
-    # JSON formatting for better readability
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
-        "rest_framework.renderers.BrowsableAPIRenderer",  # Useful during development
+        "rest_framework.renderers.BrowsableAPIRenderer",
     ],
 }
 
-# Configure Spectacular for your medical API (without security for now)
+# Configure Spectacular with Security for Swagger
 SPECTACULAR_SETTINGS = {
     "TITLE": "NAMASTE-ICD11 EMR Integration API",
     "DESCRIPTION": """
@@ -188,24 +190,35 @@ SPECTACULAR_SETTINGS = {
     "SCHEMA_PATH_PREFIX": "/api/v1/",
     "COMPONENT_SPLIT_REQUEST": True,
     "SORT_OPERATIONS": False,
-    # Use local static files for medical environment security
+    # Use local static files for security
     "SWAGGER_UI_DIST": "SIDECAR",
     "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
     "REDOC_DIST": "SIDECAR",
-    # Basic UI configurations
+    # Enable authentication in Swagger UI
     "SWAGGER_UI_SETTINGS": {
         "displayRequestDuration": True,
-        "docExpansion": "none",  # Keep operations collapsed initially
-        "filter": True,  # Enable search/filter in UI
+        "docExpansion": "none",
+        "filter": True,
         "showExtensions": True,
         "showCommonExtensions": True,
+        "persistAuthorization": True,  # Remember auth across browser sessions
     },
+    # Security schemes for Swagger
+    "APPEND_COMPONENTS": {
+        "securitySchemes": {
+            "BasicAuth": {"type": "http", "scheme": "basic"},
+            "SessionAuth": {"type": "apiKey", "in": "cookie", "name": "sessionid"},
+        }
+    },
+    "SECURITY": [
+        {
+            "BasicAuth": [],
+            "SessionAuth": [],
+        }
+    ],
 }
 
-
-# Password validation
-# https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
-
+# Rest of your settings remain the same...
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
@@ -221,37 +234,19 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
-# Internationalization
-# https://docs.djangoproject.com/en/5.2/topics/i18n/
-
 LANGUAGE_CODE = "en-us"
-
 TIME_ZONE = "Asia/Kolkata"
-
 USE_I18N = True
-
 USE_TZ = True
-
 X_FRAME_OPTIONS = "SAMEORIGIN"
 SILENCED_SYSTEM_CHECKS = ["security.W019"]
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.2/howto/static-files/
-
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-# STATICFILES_DIRS = [BASE_DIR / "static"]   # uncomment if you have custom static/
-
-
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
-
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-# ========== Redis & Celery Configuration ==========
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-# Celery Configuration
+# Redis & Celery Configuration
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0")
 CELERY_ACCEPT_CONTENT = ["json"]
@@ -260,25 +255,21 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "Asia/Kolkata"
 CELERY_ENABLE_UTC = True
 
-# Cache Configuration
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
         "LOCATION": os.getenv("CACHE_LOCATION", "redis://redis:6379/1"),
-        "TIMEOUT": 300,  # 5 minutes default timeout
+        "TIMEOUT": 300,
         "KEY_PREFIX": "ayushsync",
     }
 }
 
-# Session Configuration (Optional - for better performance)
 SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 SESSION_CACHE_ALIAS = "default"
-SESSION_COOKIE_AGE = 86400  # 24 hours
+SESSION_COOKIE_AGE = 86400
 
-# Celery Beat Scheduler
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
-# Logging Configuration (Optional - for Celery debugging)
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -298,7 +289,8 @@ LOGGING = {
         },
     },
 }
+
 # BioBERT Configuration
-BIOBERT_API_TIMEOUT = 30  # seconds
-BIOBERT_BATCH_SIZE = 5  # API batch size
-BIOBERT_RATE_LIMIT = 1  # seconds between batches
+BIOBERT_API_TIMEOUT = 30
+BIOBERT_BATCH_SIZE = 5
+BIOBERT_RATE_LIMIT = 1
