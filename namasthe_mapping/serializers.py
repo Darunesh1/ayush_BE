@@ -13,7 +13,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db.models import Avg, Count, Q
 from rest_framework import serializers
 
-from terminologies.models import Ayurvedha, Siddha, TermMapping, Unani
+from terminologies.models import Ayurvedha, ICD11Term, Siddha, TermMapping, Unani
 
 # Import your models - adjust paths according to your project structure
 from .models import ConceptMapping, MappingAudit, TerminologyMapping
