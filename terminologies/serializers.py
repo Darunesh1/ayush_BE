@@ -776,11 +776,3 @@ class CombinedSearchResponseSerializer(serializers.Serializer):
     results = ICD11SearchResultSerializer(many=True)
     pagination = serializers.DictField()
     search_metadata = serializers.DictField()
-
-
-class ErrorResponseSerializer(serializers.Serializer):
-    """Error response serializer"""
-
-    error = serializers.CharField()
-    message = serializers.CharField()
-    code = serializers.CharField()
