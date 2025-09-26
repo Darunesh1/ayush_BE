@@ -28,12 +28,13 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 
+from namasthe_mapping.serializers import ErrorResponseSerializer
+
 from .models import Ayurvedha, ICD11Term, Siddha, TermMapping, Unani
 from .serializers import (
     AyurvedhaListSerializer,
     AyurvedhaSerializer,
     CombinedSearchResponseSerializer,
-    ErrorResponseSerializer,
     ICD11TermListSerializer,
     ICD11TermSearchSerializer,
     RecentMappingSerializer,
