@@ -35,7 +35,7 @@ ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split("
 
 # CSRF and CORS settings for HTTPS with nginx proxy
 CSRF_TRUSTED_ORIGINS = [
-    "https://ayushbandan.duckdns.org",
+    "http://localhost:8000",
     "https://ayushbandhan.vercel.app",
     "https://ayush-documentation.vercel.app",
 ]
@@ -86,7 +86,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://localhost:8080",  # Vue default
     "http://127.0.0.1:8080",
-    "https://ayushbandan.duckdns.org",  # Add your HTTPS domain
+    "http://localhost:8000",  # Add your HTTPS domain
     "https://ayushbandhan.vercel.app",  # Your main frontend
     "https://ayush-documentation.vercel.app",  # Your documentation frontend
 ]
