@@ -38,6 +38,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://ayushbandan.duckdns.org",
     "https://ayushbandhan.vercel.app",
     "https://ayush-documentation.vercel.app",
+    "https://healthcare-ai-mqcn.onrender.com",
 ]
 
 # Tell Django to trust nginx proxy headers for HTTPS detection
@@ -89,6 +90,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://ayushbandan.duckdns.org",  # Add your HTTPS domain
     "https://ayushbandhan.vercel.app",  # Your main frontend
     "https://ayush-documentation.vercel.app",  # Your documentation frontend
+    "https://healthcare-ai-mqcn.onrender.com",
 ]
 # For development only - remove this in production
 CORS_ALLOW_ALL_ORIGINS = False  # Only allow all origins in debug mode
