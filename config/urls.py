@@ -26,6 +26,8 @@ urlpatterns = [
     path("api/auth/", include("auth_abha.urls")),
     path("api/analytics/", include("analytics.urls")),
     path("api/terminologies/", include("terminologies.urls")),
+    # Frontend expects these routes WITHOUT the /api/ prefix
+    path("terminologies/", include("terminologies.urls")),
 ]
 
 

@@ -51,8 +51,8 @@ class ICD11TermSerializer(serializers.ModelSerializer):
     Handles ICD-11 Traditional Medicine Module 2 (TM2) and Biomedicine terms.
     """
 
-    # Nested serializer for read operations
-    class_kind = ICDClassKindSerializer(read_only=True)
+    # Return class_kind as a simple string (name) for frontend compatibility
+    class_kind = serializers.SerializerMethodField()
 
     # Separate field for write operations
     class_kind_id = serializers.PrimaryKeyRelatedField(
@@ -63,6 +63,12 @@ class ICD11TermSerializer(serializers.ModelSerializer):
         allow_null=True,
         help_text="ID of the ICD class kind",
     )
+
+    def get_class_kind(self, obj):
+        """Return just the name string instead of a nested object."""
+        if obj.class_kind:
+            return obj.class_kind.name
+        return None
 
     # Display field for string representation
     display_name = serializers.SerializerMethodField()
